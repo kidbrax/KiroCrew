@@ -118,6 +118,78 @@ def _deferred_work_ledger(handler_name: str) -> Callable:
     return _route
 
 
+def _deferred_push_verdict(handler_name: str) -> Callable:
+    """Bind the push-verdict route without importing the subsystem at boot.
+
+    Same shape and same reason as :func:`_deferred_work_ledger`. This subsystem is an
+    operator opt-in that is OFF unless someone activated it on the keystone, and the module
+    reaches the sandbox and hashing machinery it needs to judge a push, so a module-level
+    import would make every default install pay for a feature it never uses. Route
+    registration at boot is allowed; only the import moves to the first request.
+
+    SECURITY (GPT 6.1 F1): the module is imported at a TRUSTED BOOT TIME, not on the first
+    request. On an editable/source install the package tree is the repository the agent edits,
+    so a FIRST-REQUEST import could execute a ``push_verdict.py`` an agent overwrote before
+    ever calling the route -- running agent-authored code with the gateway's own authority,
+    before the guard digest the handler itself checks (``_guard_snapshot``) could matter. It is
+    the same defect this subsystem removes one layer in (the push-GUARD script is loaded from a
+    sealed, digest-pinned snapshot for exactly this reason), left standing one layer out at the
+    handler-MODULE import. :func:`_push_verdict_boot_import` runs in an ``on_startup`` hook --
+    inside ``runner.setup()``, after the app is built but BEFORE the socket serves any request,
+    so before any agent turn -- and, ONLY on an activated install, loads the module from the
+    tree the gateway was started with. Python caches it in ``sys.modules``, so the deferred
+    ``from ... import`` here resolves that boot-loaded object and a later overwrite of the
+    ``.py`` file cannot take effect. The hook gates on activation (resolved off the loop) so a
+    default install imports nothing at boot (``no-new-work-on-gateway-boot-path`` clause 5); a
+    non-activated install keeps this first-request import as its fallback, and has no gateway
+    publish to protect anyway.
+    """
+
+    async def _route(request: web.Request) -> web.StreamResponse:
+        from kiro_crew.dashboard.handlers import push_verdict
+
+        handler = getattr(push_verdict, handler_name)
+        return await handler(request)
+
+    _route.__name__ = handler_name
+    return _route
+
+
+async def _push_verdict_boot_import(_app: web.Application) -> None:
+    """Pre-import the push-verdict handler at trusted boot time (GPT 6.1 F1).
+
+    An ``on_startup`` hook: it fires inside ``runner.setup()``, after the app is built and
+    before the socket accepts any request, so before any agent turn could overwrite the
+    module's file. On an ACTIVATED install it imports the gateway-shipped bytes into
+    ``sys.modules``, so the deferred route's ``from ... import push_verdict`` later resolves
+    that boot-loaded object rather than re-reading an agent-editable file at first request
+    (GPT 6.1 F1). Idempotent (a second import is a ``sys.modules`` hit).
+
+    GATED on activation, resolved OFF the loop (Opus 5.5): a default install that never
+    activated gating must NOT import this optional subsystem at boot --
+    ``no-new-work-on-gateway-boot-path`` clause 5 forbids it, and the import pulls in the
+    sandbox/hashing/cron machinery a default install never uses. So the pre-import happens
+    ONLY when the operator activated the gate (the only case where there is a gateway publish
+    to protect and an agent-overwrite window to close); a non-activated install does nothing
+    here and keeps the deferred first-request import as its fallback. The keystone read runs
+    in a worker thread so it does not block the event loop during ``runner.setup()``, matching
+    every other off-loop activation reader. A malformed/unreadable keystone (``ActivationUnreadable``)
+    is treated as "do not pre-import": the fail-closed publish refusal lives in the floor and
+    the route, not here, and this hook must never make a boot fail on an agent-reachable file.
+    """
+    import asyncio
+
+    from kiro_crew.security import push_verdict as _pv
+
+    try:
+        activated = await asyncio.to_thread(_pv.activation_enabled)
+    except _pv.ActivationUnreadable:
+        return
+    if not activated:
+        return
+    from kiro_crew.dashboard.handlers import push_verdict  # noqa: F401 - trusted-time pre-load
+
+
 def _register_mcp_routes(app: web.Application) -> None:
     """Register API routes used by MCP tools (spawn, lessons, crons, etc.)."""
     app.router.add_post("/api/spawn", handlers.api_spawn)
@@ -141,6 +213,16 @@ def _register_mcp_routes(app: web.Application) -> None:
     app.router.add_get("/api/lessons", handlers.api_lessons)
     app.router.add_post("/api/lessons", handlers.api_lessons_create)
     app.router.add_delete("/api/lessons", handlers.api_lessons_delete)
+    # The push gate's only writer. Registered HERE, in the shared registrar both
+    # servers call, for the reason the strict frozenset states: a route present on
+    # one server and absent on the other is exactly the drift that becomes an auth
+    # bypass.
+    app.router.add_post("/api/push-verdict/run", _deferred_push_verdict("api_push_verdict_run"))
+    # GPT 6.1 F1: load the push-verdict handler module at trusted boot time (on_startup, before
+    # the socket serves any request / any agent turn) so the route's first import can never be a
+    # first-request read of an agent-overwritten file on an editable install. See
+    # ``_push_verdict_boot_import``.
+    app.on_startup.append(_push_verdict_boot_import)
     app.router.add_get("/api/session-ledger", handlers.api_session_ledger_get)
     app.router.add_post("/api/session-ledger/record", handlers.api_session_ledger_record)
     app.router.add_get("/api/work-ledger", _deferred_work_ledger("api_work_ledger_get"))
