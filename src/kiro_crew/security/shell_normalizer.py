@@ -1386,6 +1386,81 @@ def _xargs_reconstructed_command(tokens: "list[str]") -> str:
     return " ".join(command + piped)
 
 
+def _xargs_reconstructed_command_with_flags(tokens: "list[str]") -> str:
+    """Like :func:`_xargs_reconstructed_command` but PRESERVES the invoked
+    command's own flags.
+
+    ``xargs rm -fr`` runs ``rm -fr``, a recursive-force wipe; the flag-stripping
+    form produces a bare ``rm`` the rm-floor does not recognise as destructive, so a
+    home wipe through xargs fails open with it (GPT 6.1 security-class). The rm-floor
+    classifies the result with ``_rm_targets_in_argv`` (which treats a
+    ``/``-descendant operand as allowed), so unlike the stripping form this is NOT
+    fed to the greedy whole-line ``rm -rf /.*`` regex -- keeping ``echo /tmp/x |
+    xargs rm -rf`` allowed at base parity while ``echo ~ | xargs rm -fr`` denies.
+
+    Only xargs' OWN leading options are skipped (including the value of a
+    value-taking short option); the first surviving token is the invoked command,
+    and everything after it -- flags included -- is its argv.
+    """
+    pipe = next((i for i, tk in enumerate(tokens) if "|" in tk), -1)
+    if pipe <= 0:
+        return ""
+    xargs_at = next(
+        (i for i in range(pipe + 1, len(tokens)) if _program_basename(tokens[i]) == "xargs"),
+        -1,
+    )
+    if xargs_at == -1:
+        return ""
+    rest = tokens[xargs_at + 1 :]
+    k = 0
+    value_opts = {"-I", "-i", "-n", "-L", "-l", "-P", "-s", "-d", "-E", "-a"}
+    # ``-I{}`` / ``-i`` is REPLACE-STRING mode: xargs SUBSTITUTES the stdin word
+    # into the replace token (``{}``) instead of appending it, so
+    # ``printf "$HOME" | xargs -I{} rm -rf {}/.cache/kc`` runs
+    # ``rm -rf $HOME/.cache/kc`` -- a descendant, legit. Appending the piped word
+    # here would turn the template into a bare ``$HOME`` operand and newly refuse a
+    # cache clean (base allowed it). So in replace-string mode do NOT append the
+    # producer's words: classify the command's own argv (its ``{}`` template) as-is.
+    replace_mode = False
+    while k < len(rest) and rest[k].startswith("-"):
+        opt = rest[k]
+        k += 1
+        if opt in ("-I", "-i") or opt.startswith(("-I", "-i")):
+            replace_mode = True
+            # ``-I{}`` carries the token inline; a bare ``-I`` / ``-i`` takes the next.
+            if opt in ("-I", "-i") and k < len(rest):
+                k += 1
+            continue
+        if opt in value_opts and k < len(rest):
+            k += 1
+    command = rest[k:]  # command name + ALL of its own arguments, flags included
+    if not command:
+        return ""
+    if replace_mode:
+        # Replace-string mode substitutes the stdin word INTO the ``{}`` template,
+        # so the producer's words are not appended; classify the command's own argv.
+        return " ".join(command)
+    # The stdin xargs appends to ``rm`` is the PRODUCER'S OUTPUT, not its argv. For
+    # ``echo``/``printf`` the output IS the literal word-args, so appending them
+    # reconstructs the real command (``echo ~ | xargs rm -fr`` wipes home). For a
+    # producer whose stdout is NOT its argv -- ``find <root> … -print0`` emits
+    # DESCENDANTS of its search root, ``ls`` emits entries -- the argv words
+    # (``~``/``$HOME`` as a find root or a ``cd ~`` target) are NOT what rm receives,
+    # so appending them wrongly refused a legit ``find ~ … | xargs rm -rf`` disk
+    # reclaim (Security Scope). Only reconstruct for an echo/printf producer; the
+    # producer is the LAST command segment before the pipe.
+    seg_start = 0
+    for p in range(pipe - 1, -1, -1):
+        if _ends_argv(tokens[p]) or tokens[p] in ("&&", "||"):
+            seg_start = p + 1
+            break
+    producer = tokens[seg_start:pipe]
+    if not producer or _program_basename(producer[0]) not in ("echo", "printf"):
+        return ""  # stdout != argv (or unknown) -> base parity, leave unclassified
+    piped = [tk for tk in producer[1:] if not tk.startswith("-")]
+    return " ".join(command + piped)
+
+
 _PRINTF_ESCAPES = (("\\n", " "), ("\\t", " "), ("\\r", " "), ("\\v", " "), ("\\f", " "))
 
 
@@ -3574,8 +3649,13 @@ _SHELL_ASSIGN_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)(\+?)=(.*)$", re.DOTALL
 # vanish (e.g. g""it -> git, ca''t -> cat).
 _EMPTY_QUOTE_RE = re.compile(r'""|\'\'')
 
-# Regex for $HOME or ${HOME} variable expansion.
-_HOME_VAR_RE = re.compile(r"\$\{HOME\}|\$HOME", re.IGNORECASE)
+# Regex for $HOME or ${HOME} variable expansion. The bare ``$HOME`` form
+# requires a variable-name boundary after ``HOME`` (a following ``[A-Za-z0-9_]``
+# would make it a DIFFERENT variable), so ``$HOME_BACKUP`` is not mis-expanded to
+# the home path plus ``_BACKUP`` — which otherwise makes an unrelated variable
+# look like a home-directory target (issue review finding). ``${HOME}`` is
+# already delimited by its braces.
+_HOME_VAR_RE = re.compile(r"\$\{HOME\}|\$HOME(?![A-Za-z0-9_])", re.IGNORECASE)
 
 # ANSI-C (``$'…'``) and locale (``$"…"``) quoting.  Both are QUOTING forms whose
 # value the shell computes before the program sees it, so they are resolved as part
