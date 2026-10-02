@@ -627,6 +627,35 @@ class TestTheSharedStopPath:
         assert not any("bob asked" in body for _, body in surface.edits[before:])
         assert queue.has_receipt("unified:agent"), "and his bubble keeps its only handle"
 
+    def test_a_message_sent_while_the_goal_pause_saves_survives_the_stop(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Stop drops what was queued at the press, not what arrived during its awaits."""
+        from kiro_crew import goal_actions
+
+        class _Peekable(_Sessions):
+            def peek_queue(self, key: str) -> tuple[Any, ...]:
+                return tuple(self.entries)
+
+        sessions = _Peekable([("1", "alice asked", _queued(ALICE, "a"))])
+
+        async def pausing(key: str, *, state: Any = None) -> bool:
+            sessions.entries.append(("2", "alice again", _queued(ALICE, "later")))
+            return True
+
+        monkeypatch.setattr(goal_actions, "pause_session_goal", pausing)
+        asyncio.run(
+            stop_running_turn(
+                sessions,
+                "unified:agent",
+                queue=ReceiptQueue(),
+                surface=_Surface(),
+                owner=ALICE,
+                deliver=AsyncMock(),
+            )
+        )
+        assert [kwargs["mark"] for _, _, kwargs in sessions.entries] == ["later"]
+
     def test_the_owner_argument_is_required(self) -> None:
         """No default, so a channel added later cannot inherit the whole-queue clear.
 
