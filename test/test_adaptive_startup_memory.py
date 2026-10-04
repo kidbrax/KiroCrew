@@ -154,7 +154,7 @@ def test_the_held_map_is_bounded_against_an_agent_writable_log(monkeypatch, tmp_
             sc.append_cost_sample(f"agent-{i:03d}", 0.1 + i * 0.01, 0.1)
     for _ in range(3):
         sc.append_cost_sample("x" * (sc._BUCKET_KEY_CAP + 1), 9.0, 0.1)  # not an agent name
-    costs = sc.read_learned_costs("mem_gb")
+    costs, _ = sc.read_learned_costs_checked("mem_gb")
     # The over-long key is never a bucket; of the rest, the HEAVIEST
     # _MAX_BUCKETS are returned (the parse ceiling is far above this count).
     assert len(costs) == sc._MAX_BUCKETS

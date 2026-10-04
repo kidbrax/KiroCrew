@@ -185,7 +185,7 @@ from kiro_crew.subagent_cost import (
     cap_buckets,
     compact_cost_log,
     learned_settled_for,
-    read_learned_cost,
+    read_cap_costs,
     read_learned_costs_checked,
 )
 from kiro_crew.subagent_manager import (
@@ -2079,10 +2079,12 @@ def compute_max_subagents(cfg: KiroCrewConfig) -> int:
     memory guard), never above the absolute ``subagent_auto_max`` (which
     stands in for the unmodeled LLM-provider concurrency limit).
 
-    The per-agent memory cost comes from the learned cost store
-    (``read_learned_cost``); when no learned value exists yet, the configured
-    first-boot fallback (``subagent_cost_gb``) is used. Fails open to the legacy
-    default when memory can't be read (e.g. non-Linux hosts).
+    The per-slot memory cost is a typical run's, from the learned cost store
+    (``read_cap_costs``), with the heaviest agent's p90 reserved once; when no
+    learned value exists yet, the configured
+    first-boot fallback (``subagent_cost_gb``) is used and nothing is reserved.
+    Fails open to the legacy default when memory can't be read (e.g. non-Linux
+    hosts).
 
     See ``dynamic-subagent-sizing.md`` §3.
     """
@@ -2132,15 +2134,25 @@ def _host_mem_term(cfg: KiroCrewConfig) -> int | None:
     ``max_subagents`` is the ceiling as written, and the adaptive controller
     climbs toward whichever applies on live pressure signals, not on this
     prediction.
+
+    ``floor((avail * buf - pool_size * typical - heavy_peak) / typical)``:
+    every slot is priced at a typical run (median across agents of each
+    agent's p50), and the heaviest agent's p90 (``heavy_peak``) is reserved
+    once. The reserve is what covers that agent's growth after it starts: the
+    per-spawn gate prices a start at its settled RSS (at most ~2 GB) and checks
+    free memory once, and the adaptive controller stops new starts but never
+    shrinks running ones.
     """
     agent = cfg.agent
     avail_gb = _available_memory_gb()
     if avail_gb <= 0:
         return None
     buf = 1.0 - agent.subagent_mem_buffer_pct / 100.0
-    mem_cost = read_learned_cost("mem_gb") or agent.subagent_cost_gb or DEFAULT_SUBAGENT_COST_GB
+    typical, heavy_peak = read_cap_costs("mem_gb")
+    mem_cost = typical or agent.subagent_cost_gb or DEFAULT_SUBAGENT_COST_GB
+    heavy_peak = heavy_peak or 0.0
     pool_size = cfg.session.pool_size
-    return math.floor((avail_gb * buf - pool_size * mem_cost) / mem_cost)
+    return math.floor((avail_gb * buf - pool_size * mem_cost - heavy_peak) / mem_cost)
 
 
 # Sweeps that must have measured a live row before it counts as settled (its

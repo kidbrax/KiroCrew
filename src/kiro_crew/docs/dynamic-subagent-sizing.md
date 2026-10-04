@@ -53,13 +53,15 @@ auto-sizing-only `subagent_auto_max`.
 
 ```
 buf      = 1 - subagent_mem_buffer_pct / 100
-mem_term = floor( (avail_gb * buf - pool_size * mem_cost) / mem_cost )
+mem_term = floor( (avail_gb * buf - pool_size * typical - heavy_peak) / typical )
 cap      = clamp( mem_term, 3, hard_cap )
 ```
 
 - **Memory term** — how many agents fit in available RAM after reserving a
-  buffer for the OS and other processes, and after holding back one worker's
-  cost per warm-pool slot. `avail_gb` comes from `_available_memory_gb()`,
+  buffer for the OS and other processes, after holding back one typical
+  worker's cost per warm-pool slot, and after reserving the heaviest agent's
+  peak once. `typical` and `heavy_peak` come from the learned cost store (see
+  below). `avail_gb` comes from `_available_memory_gb()`,
   which on Linux is `min(MemAvailable, cgroup headroom)` so a memory-capped
   container is respected.
 - **No CPU term** — deliberately. Over-committing memory ends in the OOM
@@ -89,9 +91,19 @@ Kiro Crew doesn't hard-code how much an agent costs — it measures it:
 - At exit, one sample `{agent, mem_gb, cpu_cores, ts}` is appended to
   `~/.kiro/crew/subagents/cost_samples.jsonl`. The CPU figure is telemetry
   only; sizing reads `mem_gb`.
-- At the next startup, Kiro Crew takes the **p90 of the last N memory samples
-  per agent name** (robust to the occasional outlier run), then the worst case
-  across agent types, as the divisor.
+- At the next startup, Kiro Crew takes the **p50 of the last N memory samples
+  per agent name**, then the median across agent types, as the divisor: a
+  typical run, so one build-heavy agent does not price every slot. Each agent
+  counts once, not weighted by how often it runs, so the busiest agent's mix
+  cannot set every slot's price.
+- It also **reserves the heaviest agent's p90 once**:
+  `floor((avail * buf - pool_size * typical - heavy_peak) / typical)`. The
+  live guards do not cover a run's growth after it starts: the per-spawn gate
+  prices a start at its settled RSS (at most ~2 GB) and checks free memory
+  once, and the adaptive controller stops new starts but does not shrink
+  running ones. The reserve is what accounts for one heavy agent's peak; it
+  is one reserve, so several concurrent heavy runs are an accepted risk the
+  live gate meets only at start time.
 
 The longer the gateway runs, the more accurate the learned cost becomes. The
 sample log is bounded to the last N records per agent (FIFO compaction at
