@@ -1813,7 +1813,8 @@ decides what Enter and the send button do: the split button's per-slot mode
 picks between steering the running turn, queueing, and `Auto (Jev)` (the gateway
 decides; offered only when the host passes `jevAutoAvailable`); in the Enter send
 mode, ⌘↩ / Ctrl+Enter performs the other action for that one send; and a
-`steer-only` surface (a member DM thread) has no queue and always steers.
+host that passes `busyMode="steer-only"` has no queue and always steers (no
+shipped surface does today: the Crew members DM uses the split button too).
 `BusySendControls` in the same file renders that slot. `ChatInput.test.tsx` pins
 steer versus queue, the one-send flip and the persisted mode, and
 `ChatPane.steerOnly.test.tsx` the steer-only surface.

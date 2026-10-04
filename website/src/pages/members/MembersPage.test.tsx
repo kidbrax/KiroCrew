@@ -793,11 +793,9 @@ describe('MembersPage thread', () => {
     // transcript and composer halves itself; its default stays off for
     // split-view panes, which are already narrow).
     expect(pane).toHaveAttribute('data-follow-content-width', '1')
-    // A DM has no queue concept: a send while the member is working steers
-    // into its running turn. The pane's own steer-only behaviour (plain send
-    // button, no split, no QueueStack) is pinned in ChatPane.steerOnly.test;
-    // this line pins that the Members page is the host that asks for it.
-    expect(pane).toHaveAttribute('data-busy-mode', 'steer-only')
+    // A send while the member is working gets the main chat's Steer / Queue /
+    // Jev auto split, so the Members page must NOT ask for 'steer-only'.
+    expect(pane).toHaveAttribute('data-busy-mode', 'split')
     // The pin is an invariant of every member thread, so the header does NOT
     // announce it — no chip, no term for a state that cannot be otherwise.
     expect(screen.queryByTestId('member-pin-chip')).toBeNull()
