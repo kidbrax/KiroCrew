@@ -2328,6 +2328,19 @@ def _ascii_slot_key(name: str) -> str:
 # ``_safe_key`` produces byte-for-byte.
 _SLOT_KEY_FILENAME_UNSAFE_RE = re.compile(r"[^\w\-.]", flags=re.ASCII)
 
+# Longest slot key kept verbatim. A transcript is ``<stem>.jsonl`` -- the stem
+# is ``dashboard_<key>`` for a dashboard slot and the key itself for a channel
+# slot -- and filesystems refuse a name over 255 bytes (ENAMETOOLONG). So a key
+# longer than this could never have had a transcript of either kind; only such
+# a key is shortened, and a key whose transcript may already exist keeps its
+# spelling so a restart still finds it. A longer key keeps its first
+# ``_SLOT_KEY_KEEP_CHARS`` characters plus ``-`` and a short sha256 of the whole
+# folded key: a valid filename stem, stable across calls, distinct per name, and
+# short enough to stay unchanged when folded again.
+_SLOT_KEY_MAX_CHARS = 255 - len(".jsonl")
+_SLOT_KEY_KEEP_CHARS = 180
+_SLOT_KEY_HASH_CHARS = 12
+
 
 def _normalize_slot_key(name: str) -> str:
     """Return *name* folded to the exact charset of a persisted session filename.
@@ -2352,13 +2365,19 @@ def _normalize_slot_key(name: str) -> str:
     the dedup guards compare mismatched strings, so the user sees two
     identical sidebar sessions backed by one transcript, and the next
     ``_persist_open_slots`` flush cements both keys. Idempotent;
-    auto-generated ``chat-N-<ts>`` keys are returned unchanged.
+    auto-generated ``chat-N-<ts>`` keys are returned unchanged. A key longer
+    than ``_SLOT_KEY_MAX_CHARS`` is shortened (see the constant) so its
+    transcript filename stays under the filesystem's name limit.
     """
     if name.startswith("dashboard:"):
         name = name[len("dashboard:") :]
     while name.startswith("dashboard_"):
         name = name[len("dashboard_") :]
-    return _SLOT_KEY_FILENAME_UNSAFE_RE.sub("_", _ascii_slot_key(name))
+    key = _SLOT_KEY_FILENAME_UNSAFE_RE.sub("_", _ascii_slot_key(name))
+    if len(key) > _SLOT_KEY_MAX_CHARS:
+        digest = hashlib.sha256(key.encode("ascii")).hexdigest()[:_SLOT_KEY_HASH_CHARS]
+        key = f"{key[:_SLOT_KEY_KEEP_CHARS]}-{digest}"
+    return key
 
 
 # Tag revisions are totally ordered across gateway restarts. Each process claims
