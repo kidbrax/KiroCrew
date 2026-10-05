@@ -1079,6 +1079,34 @@ class RunnerAdmission:
 
     # -- admit ---------------------------------------------------------------
 
+    async def _deferred_for_pressure(self, store: TaskStore | None, task_id: str) -> bool:
+        """Defer *task_id* once if the memory-pressure check refuses it now.
+
+        True when it was deferred (the row is marked and the admit wait has
+        been slept), so the caller loops back to its own top; False when there
+        is no check or it admits.
+        """
+        if self._pressure is None:
+            return False
+        decision = self._pressure()
+        if getattr(decision, "admitted", True):
+            return False
+        self._deferred += 1
+        reason = str(getattr(decision, "reason", "") or "memory pressure")
+        if store is not None:
+            try:
+                await self._db(
+                    store.defer,
+                    task_id,
+                    self.now() + self._admit_wait,
+                    reason=reason,
+                )
+            except TaskStoreUnavailable:
+                logger.debug("taskq runner: defer of %s failed", task_id, exc_info=True)
+        logger.info("taskq runner: %s deferred (%s)", task_id, reason)
+        await self._sleep(min(self._admit_wait, _MAX_ADMIT_SLEEP_SECS))
+        return True
+
     async def admit(
         self,
         task_id: str,
@@ -1129,28 +1157,11 @@ class RunnerAdmission:
             while True:
                 if store is not None:
                     await self._db(self._raise_if_ended, store, task_id)
-                if self._pressure is not None:
-                    decision = self._pressure()
-                    if not getattr(decision, "admitted", True):
-                        self._deferred += 1
-                        reason = str(getattr(decision, "reason", "") or "memory pressure")
-                        if store is not None:
-                            try:
-                                await self._db(
-                                    store.defer,
-                                    task_id,
-                                    self.now() + self._admit_wait,
-                                    reason=reason,
-                                )
-                            except TaskStoreUnavailable:
-                                logger.debug(
-                                    "taskq runner: defer of %s failed", task_id, exc_info=True
-                                )
-                        logger.info("taskq runner: %s deferred (%s)", task_id, reason)
-                        await self._sleep(min(self._admit_wait, _MAX_ADMIT_SLEEP_SECS))
-                        continue
+                if await self._deferred_for_pressure(store, task_id):
+                    continue
                 ancestors: frozenset[str] = frozenset()
-                if store is not None and self.lane.saturated:
+                parks = self.lane.saturated
+                if store is not None and parks:
                     ancestors = await self._db(self._ancestor_ids, store, task_id)
                 try:
                     await self.lane.acquire(task_id, ancestors=ancestors)
@@ -1166,6 +1177,15 @@ class RunnerAdmission:
                     self.forget(task_id)
                     raise
                 slot_held = True
+                # The lane does not pause on memory (the execution cap reads
+                # work evidence only), so a step that parked behind a full lane
+                # is granted whatever memory reads at the grant, and the check
+                # above predates the wait. Re-check it, and give the slot back
+                # while the host is still under pressure.
+                if parks and await self._deferred_for_pressure(store, task_id):
+                    self.lane.release(task_id)
+                    slot_held = False
+                    continue
                 if store is None:
                     slot_held = False  # the handle owns the slot from here
                     return Admitted(

@@ -653,6 +653,45 @@ async def test_admit_defers_on_memory_pressure_instead_of_refusing(
 
 
 @pytest.mark.asyncio
+async def test_a_step_granted_after_a_lane_wait_rechecks_memory_pressure(
+    store: TaskStore, clock: Clock
+) -> None:
+    """The lane does not pause on memory, so a step parked behind a full lane
+    must not start on a grant that lands while the host is critical: the
+    check it passed before parking is stale by then."""
+    verdicts = iter(
+        [
+            SimpleNamespace(admitted=True, reason=""),  # a, lane free
+            SimpleNamespace(admitted=True, reason=""),  # b, before it parks
+            SimpleNamespace(admitted=False, reason="memory critical"),  # b, at its grant
+            SimpleNamespace(admitted=True, reason=""),  # b, after the deferral
+        ]
+    )
+    adm, sleeps = _admission(
+        store, clock, cap=1, pressure=lambda: next(verdicts), admit_wait_secs=5.0
+    )
+    a = adm.accept(kind=m.KIND_TASKRUNNER_STEP, task_id="taskrunner:r:task1")
+    b = adm.accept(kind=m.KIND_TASKRUNNER_STEP, task_id="taskrunner:r:task2")
+    ha = await adm.admit(a.id)
+    waiter = asyncio.create_task(adm.admit(b.id))
+    for _ in range(500):  # b's store reads hop off the loop before it parks
+        if adm.lane.waiting == 1:
+            break
+        await asyncio.sleep(0.01)
+    assert adm.lane.waiting == 1
+    ha.done()  # the grant reaches b while memory is critical
+    hb = await asyncio.wait_for(waiter, 5)
+    assert hb.state == m.STARTING
+    kinds = [k for k, _ in _events(store, b.id)]
+    assert kinds[:3] == ["accepted", "deferred", "claimed"]
+    assert sleeps.calls == [5.0]
+    assert adm.deferred_count == 1
+    assert adm.lane.running == 1
+    hb.done()
+    assert adm.lane.running == 0
+
+
+@pytest.mark.asyncio
 async def test_admit_raises_when_the_row_was_cancelled_while_waiting(
     store: TaskStore, clock: Clock
 ) -> None:
