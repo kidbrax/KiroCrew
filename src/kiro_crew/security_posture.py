@@ -1923,8 +1923,8 @@ NON_EGRESS_REDACTION_MODULES: frozenset[str] = frozenset(
         # same overstatement the decision-seam entry above refuses for refusal.
         "builtin_skills/pipeline-conductor/scripts/fleet_probe.py",
         # The loop stop record: store-sourced ids and caller reasons are scrubbed
-        # before they are held in memory or written to the gateway log. Local
-        # diagnostics, not an egress pass.
+        # before they are held in memory or written to the gateway log or the
+        # stop file under ``logs/``. Local diagnostics, not an egress pass.
         "autonudge_stop_log.py",
         # Inbound structured-monitor target validation. A canonical provider URL
         # is rejected when its path contains credential-shaped text, before the
