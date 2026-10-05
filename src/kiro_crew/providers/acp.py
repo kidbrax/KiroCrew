@@ -91,6 +91,7 @@ from kiro_crew.effort import (
 )
 from kiro_crew.mcp_hot_reload import mcp_hot_reload_supported, parse_kiro_cli_version
 from kiro_crew.messaging.link import telemetry_channel_of
+from kiro_crew.platform_compat import pid_exists
 from kiro_crew.providers.base import (
     CancelOutcome,
     LLMEvent,
@@ -399,6 +400,32 @@ _RESUME_TRANSIENT_LOCK_MARKERS: tuple[str, ...] = (
     "active in another process",
     "re-read lock file",
 )
+
+
+def _unlink_dead_session_lock(session_id: str) -> bool:
+    """Remove ``<sid>.lock`` when the PID it names is dead; True when removed.
+
+    kiro-cli writes ``{"pid": N, "started_at": ...}`` and deletes it only on a
+    clean exit, so a SIGKILLed holder leaves a lock that refuses every later
+    session/load. A live holder (including one we may not signal) or a lock we
+    cannot read or parse is left alone.
+    """
+    sessions_dir = kiro_sessions_dir()
+    lock = sessions_dir / f"{session_id}.lock"
+    if not session_id or not _is_safe_path(lock, sessions_dir):
+        return False
+    try:
+        pid = json.loads(lock.read_text(encoding="utf-8"))["pid"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+    if type(pid) is not int or pid <= 0 or pid_exists(pid):
+        return False
+    try:
+        lock.unlink()
+    except OSError:
+        return False
+    logger.warning("Removed stale kiro session lock %s (holder PID %d is dead)", lock, pid)
+    return True
 
 
 def _is_transient_resume_lock_error(exc: BaseException) -> bool:
@@ -1064,17 +1091,32 @@ class AcpProvider(LLMProvider):
                                        genuine failure only wastes time).
         * runtime dies mid-retry   → return ``None`` (caller's respawn handles it).
         """
+
+        async def load() -> AcpSessionHandle:
+            return await runtime.load_session(
+                session_file,
+                resume_sid,
+                cwd=work_dir,
+                agent=agent or None,
+                member_session_key=member_session_key,
+                session_key=session_key,
+                channel_id=channel_id,
+            )
+
+        swept = False
         for attempt in range(_RESUME_MAX_ATTEMPTS):
             try:
-                handle = await runtime.load_session(
-                    session_file,
-                    resume_sid,
-                    cwd=work_dir,
-                    agent=agent or None,
-                    member_session_key=member_session_key,
-                    session_key=session_key,
-                    channel_id=channel_id,
-                )
+                try:
+                    handle = await load()
+                except Exception as exc:
+                    # A holder that died uncleanly keeps its lock forever, so
+                    # waiting cannot clear it: remove it and retry once, now.
+                    if swept or "active in another process" not in str(exc).lower():
+                        raise
+                    swept = True
+                    if not _unlink_dead_session_lock(resume_sid):
+                        raise
+                    handle = await load()
                 if attempt:
                     logger.info(
                         "Resume of kiro session %s recovered on attempt %d/%d "
