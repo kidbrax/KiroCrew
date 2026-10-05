@@ -175,7 +175,10 @@ def _url_payload_command(n: int) -> str:
 #: registry live in a keystone file on the same read+write floor as
 #: ``denied_commands.json``, so the leaf and its two-line reason are three lines the gate
 #: cannot avoid.
-_PACKAGE_LINE_BUDGET = 28_415
+#:
+#: Raised for eight stdout-only filters on the read-only bash allowlist, plus the
+#: rules for `xxd`'s output operand and jq programs that read the environment.
+_PACKAGE_LINE_BUDGET = 28_465
 
 #: Ceiling on any ONE file in the package. This is what the bound is really for --
 #: a package total says nothing about a single file growing back into a second
