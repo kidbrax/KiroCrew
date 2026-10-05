@@ -727,11 +727,18 @@ async def _restore_app_after_failed_update(name: str) -> None:
     unconditional re-register would publish a disabled app's agents, skills,
     MCP servers and crons, and nothing scrubs them again until the next
     enable/disable. Live read: a failed update leaves the record unchanged.
+
+    Recovery failures are logged and never escape: the caller still owes the
+    failed-update audit line and the 400 body, and the cause of the failed
+    update (disk full, no free port) is often what breaks the restore too.
     """
     if not await _app_may_run_after_install(name):
         return
-    await _register_app_off_loop(name)
-    await asyncio.get_running_loop().run_in_executor(subprocess_executor(), start_app_backend, name)
+    try:
+        await _register_app_off_loop(name)
+    except Exception:
+        logger.warning("Re-register after failed update failed for app %s", name, exc_info=True)
+    await _start_backend_after_install(name)
 
 
 async def _suspend_app_for_session_approval_reconsent(
