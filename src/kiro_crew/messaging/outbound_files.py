@@ -88,8 +88,8 @@ from kiro_crew.hooks import (
 )
 from kiro_crew.messaging.raster import SNIFF_BYTES, sniff_raster_mime
 from kiro_crew.messaging.split import iter_fence_spans
+from kiro_crew.pinned_fs import screen_linked_chain_held
 from kiro_crew.platform import binary_content_is_flagged
-from kiro_crew.platform_compat import first_linked_ancestor, is_link_or_junction
 from kiro_crew.security import (
     is_sensitive_path,
     redact_credentials,
@@ -637,17 +637,22 @@ def _inspect(
         # purpose -- which ancestor is a link is filesystem layout the caller
         # supplied a path to guess at. Reference wiring:
         # dashboard/handlers/themes.py::_resolve_local_source.
-        if os.name == "nt" and first_linked_ancestor(path) is not None:
-            return Rejection(dest, REASON_SYMLINK, "symlinks are not uploaded")
-        # The LEAF gets the junction-aware check the walk deliberately
-        # excludes. The all-platform is_symlink() refusal below is lstat-only
-        # (junction-blind) and runs after is_sensitive_path, whose candidate
-        # forms resolve the leaf too -- so on Windows the leaf must be
-        # screened here, before the first resolving call. lstat-based, never
-        # follows.
-        if os.name == "nt" and is_link_or_junction(path):
-            return Rejection(dest, REASON_SYMLINK, "symlinks are not uploaded")
-        if is_sensitive_path(str(path)):
+        #
+        # The screen and the sensitive check share ONE hold:
+        # `screen_linked_chain_held` refuses a link ANYWHERE in the chain
+        # (ancestor OR leaf) and returns the held descriptor's own final path,
+        # so `is_sensitive_path` below runs on THAT canonical path, not a raw
+        # name a junction could redirect between the screen and the check. The
+        # byte read goes through `safe_read_file_bytes_nolink` ->
+        # `validate_file_path`'s own held chain, so every by-name probe on this
+        # surface runs under a hold.
+        sens_target = str(path)
+        if os.name == "nt":
+            held = screen_linked_chain_held(str(path))
+            if held is None:
+                return Rejection(dest, REASON_SYMLINK, "symlinks are not uploaded")
+            sens_target = held
+        if is_sensitive_path(sens_target):
             return Rejection(dest, REASON_SENSITIVE, "reading this location is blocked")
         if path.is_symlink():
             # Refused rather than resolved: the bytes below must come from the

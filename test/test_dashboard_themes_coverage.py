@@ -127,9 +127,7 @@ def allow_install(monkeypatch: pytest.MonkeyPatch) -> None:
         layer = "standalone"
         reason = ""
 
-    monkeypatch.setattr(
-        gov_mod, "governance_permits", lambda *a, **k: _Allowed(), raising=True
-    )
+    monkeypatch.setattr(gov_mod, "governance_permits", lambda *a, **k: _Allowed(), raising=True)
 
 
 # ── _list_themes_sync ──────────────────────────────────────────────────────
@@ -177,9 +175,7 @@ class TestListThemesSync:
         _write_text(themes_dir / "bad" / "theme.json", "{{{")
         assert th._list_themes_sync() == []
 
-    def test_dot_prefixed_staging_and_backup_dirs_are_never_listed(
-        self, themes_dir: Path
-    ) -> None:
+    def test_dot_prefixed_staging_and_backup_dirs_are_never_listed(self, themes_dir: Path) -> None:
         _write_json(themes_dir / ".install-staging-abc" / "theme.json", {"name": "X"})
         _write_json(themes_dir / ".lcars.old-abc" / "theme.json", {"name": "Y"})
         assert th._list_themes_sync() == []
@@ -221,9 +217,7 @@ class TestApiThemesCreate:
 
     @pytest.mark.asyncio
     async def test_validation_error_is_surfaced(self, themes_dir: Path) -> None:
-        resp = await th.api_themes_create(
-            _request("POST", "/api/themes", body={"name": "  "})
-        )
+        resp = await th.api_themes_create(_request("POST", "/api/themes", body={"name": "  "}))
         assert resp.status == 400
         assert _body(resp)["error"] == "name is required"
 
@@ -257,9 +251,7 @@ class TestApiThemesCreate:
     @pytest.mark.asyncio
     async def test_existing_record_is_409(self, themes_dir: Path) -> None:
         _write_json(themes_dir / "sunset.json", {"name": "Sunset"})
-        resp = await th.api_themes_create(
-            _request("POST", "/api/themes", body=_theme_body())
-        )
+        resp = await th.api_themes_create(_request("POST", "/api/themes", body=_theme_body()))
         assert resp.status == 409
         assert "already exists" in _body(resp)["error"]
 
@@ -268,9 +260,7 @@ class TestApiThemesCreate:
         # The in-lock check refuses a slug already taken by an installed
         # <slug>/ directory, not just an existing <slug>.json record.
         (themes_dir / "sunset").mkdir()
-        resp = await th.api_themes_create(
-            _request("POST", "/api/themes", body=_theme_body())
-        )
+        resp = await th.api_themes_create(_request("POST", "/api/themes", body=_theme_body()))
         assert resp.status == 409
 
     @pytest.mark.asyncio
@@ -279,9 +269,7 @@ class TestApiThemesCreate:
     ) -> None:
         home = tmp_path / "fresh"
         monkeypatch.setenv("KIROCREW_HOME", str(home))
-        resp = await th.api_themes_create(
-            _request("POST", "/api/themes", body=_theme_body())
-        )
+        resp = await th.api_themes_create(_request("POST", "/api/themes", body=_theme_body()))
         assert resp.status == 200
         assert (home / "themes" / "sunset.json").is_file()
 
@@ -335,9 +323,7 @@ class TestApiThemesCreateOffLoop:
         for name in real_calls:
             monkeypatch.setattr(Path, name, _spy(name))
 
-        resp = await th.api_themes_create(
-            _request("POST", "/api/themes", body=_theme_body())
-        )
+        resp = await th.api_themes_create(_request("POST", "/api/themes", body=_theme_body()))
         assert resp.status == (409 if preexisting else 200)
         assert fs_threads, "expected the handler to touch the filesystem"
         on_loop = [t for t in fs_threads if t == loop_thread]
@@ -426,6 +412,10 @@ class TestResolveLocalSource:
         monkeypatch.setattr(th, "IS_WINDOWS", True)
         monkeypatch.setattr(th, "unc_probe_allowed", lambda _p: True)
         monkeypatch.setattr(th, "is_link_or_junction", lambda _p: False)
+        # Admit the chain (no link): return a canonical path so the held screen
+        # does not reach the real Windows primitive on a POSIX host, and the
+        # branch under test (the shape screen) is what decides.
+        monkeypatch.setattr(th, "screen_linked_chain_held", lambda _p: r"\\roaming\profile\pack")
         reached: list[str] = []
 
         def _reached(self: object) -> bool:
@@ -529,15 +519,9 @@ class TestCloneGithubGuard:
         assert err == th._THEME_GIT_SANDBOX_UNAVAILABLE
         assert seen == []
 
-    def test_timeout_is_reported(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        self._stub_run(
-            monkeypatch, th.subprocess.TimeoutExpired(cmd="git", timeout=1.0)
-        )
-        assert th._clone_github("https://github.com/o/r", tmp_path / "c") == (
-            "git clone timed out"
-        )
+    def test_timeout_is_reported(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._stub_run(monkeypatch, th.subprocess.TimeoutExpired(cmd="git", timeout=1.0))
+        assert th._clone_github("https://github.com/o/r", tmp_path / "c") == ("git clone timed out")
 
     def test_nonzero_exit_reports_redacted_stderr(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -602,9 +586,7 @@ class TestCopyInstalledThemeSwapGuards:
         budget = max(th._THEME_TOTAL_BYTES_BY_LEVEL.values())
         # A small file on disk (so the pre-read lstat bound passes) whose READ
         # returns more bytes than the ceiling — the regular-file swap case.
-        monkeypatch.setattr(
-            th, "safe_read_file_bytes_nolink", lambda *a, **k: b"x" * (budget + 1)
-        )
+        monkeypatch.setattr(th, "safe_read_file_bytes_nolink", lambda *a, **k: b"x" * (budget + 1))
         with pytest.raises(ValueError, match="maximum install size"):
             th._copy_installed_theme(src, tmp_path / "dst")
 
@@ -827,9 +809,7 @@ class TestDoInstallPromotion:
         # No staging or backup residue is left behind.
         assert [p.name for p in themes_dir.iterdir()] == ["lcars"]
 
-    def test_reinstall_replaces_the_installed_pack(
-        self, themes_dir: Path, tmp_path: Path
-    ) -> None:
+    def test_reinstall_replaces_the_installed_pack(self, themes_dir: Path, tmp_path: Path) -> None:
         src = _make_pack(tmp_path / "pack")
         assert th._do_install("local", {"path": str(src)})[2] == 200
         _write_text(src / "readme.md", "second revision\n")
@@ -853,9 +833,7 @@ class TestDoInstallPromotion:
     ) -> None:
         src = _make_pack(tmp_path / "pack")
         assert th._do_install("local", {"path": str(src)})[2] == 200
-        theme, err, status = th._do_install(
-            "local", {"path": str(themes_dir / "lcars")}
-        )
+        theme, err, status = th._do_install("local", {"path": str(themes_dir / "lcars")})
         assert theme is None and status == 400
         assert err == "source is already the installed theme directory"
 
@@ -910,12 +888,8 @@ class TestApiThemesInstall:
         assert audits == [("denied", "governance unavailable (fail-closed)")]
 
     @pytest.mark.asyncio
-    async def test_malformed_json_is_400(
-        self, themes_dir: Path, allow_install: None
-    ) -> None:
-        resp = await th.api_themes_install(
-            _request("POST", "/api/themes/install", body=None)
-        )
+    async def test_malformed_json_is_400(self, themes_dir: Path, allow_install: None) -> None:
+        resp = await th.api_themes_install(_request("POST", "/api/themes/install", body=None))
         assert resp.status == 400
         assert _body(resp)["error"] == "invalid JSON"
 
@@ -927,9 +901,7 @@ class TestApiThemesInstall:
         themes_dir: Path,
         allow_install: None,
     ) -> None:
-        resp = await th.api_themes_install(
-            _request("POST", "/api/themes/install", body=payload)
-        )
+        resp = await th.api_themes_install(_request("POST", "/api/themes/install", body=payload))
         assert resp.status == 400
         assert _body(resp)["error"] == "missing 'source' object"
 
@@ -940,9 +912,7 @@ class TestApiThemesInstall:
         allow_install: None,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        monkeypatch.setattr(
-            th, "_do_install", lambda stype, source: (None, "nope", 409)
-        )
+        monkeypatch.setattr(th, "_do_install", lambda stype, source: (None, "nope", 409))
         resp = await th.api_themes_install(
             _request(
                 "POST",
@@ -994,9 +964,7 @@ class TestApiThemesInstall:
             "level": 0,
             "source": "local",
         }
-        monkeypatch.setattr(
-            th, "_do_install", lambda stype, source: (descriptor, None, 200)
-        )
+        monkeypatch.setattr(th, "_do_install", lambda stype, source: (descriptor, None, 200))
         resp = await th.api_themes_install(
             _request(
                 "POST",
@@ -1012,9 +980,7 @@ class TestApiThemesInstall:
 
 
 def _detail(method: str, slug: str, *, body: object = ...) -> web.Request:
-    return _request(
-        method, f"/api/themes/{slug}", body=body, match_info={"slug": slug}
-    )
+    return _request(method, f"/api/themes/{slug}", body=body, match_info={"slug": slug})
 
 
 class TestApiThemeDetailSlugGuard:
@@ -1130,9 +1096,7 @@ class TestApiThemeDetailPut:
             themes_dir / "sunset.json",
             {"name": "Old", "created_at": "2026-01-01T00:00:00+00:00"},
         )
-        resp = await th.api_theme_detail(
-            _detail("PUT", "sunset", body=_theme_body("New Name"))
-        )
+        resp = await th.api_theme_detail(_detail("PUT", "sunset", body=_theme_body("New Name")))
         assert resp.status == 200
         theme = _body(resp)["theme"]
         assert theme["name"] == "New Name"
@@ -1141,9 +1105,7 @@ class TestApiThemeDetailPut:
         assert json.loads((themes_dir / "sunset.json").read_text("utf-8")) == theme
 
     @pytest.mark.asyncio
-    async def test_corrupt_existing_record_gets_a_fresh_created_at(
-        self, themes_dir: Path
-    ) -> None:
+    async def test_corrupt_existing_record_gets_a_fresh_created_at(self, themes_dir: Path) -> None:
         _write_text(themes_dir / "sunset.json", "{ not json")
         resp = await th.api_theme_detail(_detail("PUT", "sunset", body=_theme_body()))
         assert resp.status == 200
@@ -1152,9 +1114,7 @@ class TestApiThemeDetailPut:
     @pytest.mark.asyncio
     async def test_blank_emoji_falls_back_to_the_default(self, themes_dir: Path) -> None:
         _write_json(themes_dir / "sunset.json", {"name": "Sunset"})
-        resp = await th.api_theme_detail(
-            _detail("PUT", "sunset", body=_theme_body(emoji=" "))
-        )
+        resp = await th.api_theme_detail(_detail("PUT", "sunset", body=_theme_body(emoji=" ")))
         assert _body(resp)["theme"]["emoji"] == th._THEME_DEFAULT_EMOJI
 
 
@@ -1175,9 +1135,7 @@ class TestApiThemeDetailGet:
         assert _body(resp)["error"] == "failed to read theme"
 
     @pytest.mark.asyncio
-    async def test_installed_pack_detail_carries_level_and_assets(
-        self, themes_dir: Path
-    ) -> None:
+    async def test_installed_pack_detail_carries_level_and_assets(self, themes_dir: Path) -> None:
         pack = _make_pack(themes_dir / "lcars", level=1)
         manifest_path = pack / "theme.json"
         manifest = json.loads(manifest_path.read_text("utf-8"))
@@ -1270,9 +1228,7 @@ class TestApiThemeAsset:
         assert resp.status == 404
 
     @pytest.mark.asyncio
-    async def test_serves_the_asset_with_a_locked_down_csp(
-        self, themes_dir: Path
-    ) -> None:
+    async def test_serves_the_asset_with_a_locked_down_csp(self, themes_dir: Path) -> None:
         _make_pack(themes_dir / "lcars")
         _write_text(themes_dir / "lcars" / "branding" / "logo.svg", "<svg/>")
         resp = await th.api_theme_asset(_asset_request("lcars", "branding/logo.svg"))
@@ -1358,17 +1314,13 @@ class TestApiThemeAsset:
         _make_pack(themes_dir / "lcars")
         _write_text(themes_dir / "lcars" / "styles" / "overrides.css", "a{}")
         resp = await th.api_theme_asset(
-            _asset_request(
-                "lcars", "styles/overrides.css", headers={"If-None-Match": 'W/"abd"'}
-            )
+            _asset_request("lcars", "styles/overrides.css", headers={"If-None-Match": 'W/"abd"'})
         )
         assert resp.status == 200
         assert resp.body == b"a{}"
 
 
-def _overlay_request(
-    slug: str, oid: str, *, headers: dict[str, str] | None = None
-) -> web.Request:
+def _overlay_request(slug: str, oid: str, *, headers: dict[str, str] | None = None) -> web.Request:
     return _request(
         "GET",
         f"/api/theme/{slug}/overlay/{oid}",
@@ -1380,9 +1332,7 @@ def _overlay_request(
 class TestApiThemeOverlay:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("oid", ["", "../etc", "a/b", "a.b"])
-    async def test_unsafe_overlay_id_is_400(
-        self, oid: str, themes_dir: Path
-    ) -> None:
+    async def test_unsafe_overlay_id_is_400(self, oid: str, themes_dir: Path) -> None:
         resp = await th.api_theme_overlay(_overlay_request("lcars", oid))
         assert resp.status == 400
         assert _body(resp)["error"] == "invalid overlay id"
@@ -1414,9 +1364,7 @@ class TestApiThemeOverlay:
     @pytest.mark.asyncio
     async def test_serves_overlay_html_sandboxed(self, themes_dir: Path) -> None:
         _make_pack(themes_dir / "lcars")
-        _write_text(
-            themes_dir / "lcars" / "overlays" / "scanner.html", "<div>scan</div>"
-        )
+        _write_text(themes_dir / "lcars" / "overlays" / "scanner.html", "<div>scan</div>")
         resp = await th.api_theme_overlay(_overlay_request("lcars", "SCANNER"))
         assert resp.status == 200
         assert resp.text == "<div>scan</div>"
@@ -1432,9 +1380,7 @@ class TestApiThemeOverlay:
         self, themes_dir: Path
     ) -> None:
         _make_pack(themes_dir / "lcars")
-        _write_text(
-            themes_dir / "lcars" / "overlays" / "scanner.html", "<div>scan</div>"
-        )
+        _write_text(themes_dir / "lcars" / "overlays" / "scanner.html", "<div>scan</div>")
         first = await th.api_theme_overlay(_overlay_request("lcars", "scanner"))
         etag = first.headers["ETag"]
         again = await th.api_theme_overlay(
@@ -1448,9 +1394,7 @@ class TestApiThemeOverlay:
         assert again.headers["Content-Security-Policy"] == th._THEME_OVERLAY_CSP
 
 
-def _topbar_request(
-    slug: str, mode: str, *, headers: dict[str, str] | None = None
-) -> web.Request:
+def _topbar_request(slug: str, mode: str, *, headers: dict[str, str] | None = None) -> web.Request:
     return _request(
         "GET",
         f"/api/theme/{slug}/topbar/{mode}",
@@ -1462,9 +1406,7 @@ def _topbar_request(
 class TestApiThemeTopbar:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("mode", ["", "DARK", "sepia", "../dark"])
-    async def test_unknown_mode_is_400(
-        self, mode: str, themes_dir: Path
-    ) -> None:
+    async def test_unknown_mode_is_400(self, mode: str, themes_dir: Path) -> None:
         resp = await th.api_theme_topbar(_topbar_request("lcars", mode))
         assert resp.status == 400
         assert _body(resp)["error"] == "mode must be dark or light"
@@ -1539,10 +1481,16 @@ class TestResolveLocalSourceAncestorLinks:
     """
 
     @requires_symlinks
-    def test_a_local_path_beneath_a_linked_ancestor_is_refused(
-        self, tmp_path, monkeypatch
-    ):
+    def test_a_local_path_beneath_a_linked_ancestor_is_refused(self, tmp_path, monkeypatch):
         monkeypatch.setattr(th, "IS_WINDOWS", True)
+        # The held screen walks the chain with the Windows classifier
+        # (``win_fd_is_link``, ctypes), which does not run on a POSIX host. The
+        # real symlink below is still refused on POSIX: ``open_entry_no_follow``
+        # opens with ``O_NOFOLLOW`` so the link raises ``ELOOP`` and the screen
+        # returns ``None``. Stand the classifier down to "not a link" for the
+        # real (non-link) ancestor dirs so only the genuine symlink refuses.
+        if os.name != "nt":
+            monkeypatch.setattr(platform_compat, "win_fd_is_link", lambda _fd: False)
         real = tmp_path / "real"
         real.mkdir()
         (real / "theme").mkdir()
@@ -1550,17 +1498,17 @@ class TestResolveLocalSourceAncestorLinks:
         link.symlink_to(real, target_is_directory=True)
 
         # Entirely local-looking, and the LEAF is a real directory: neither the
-        # UNC screen nor the leaf link check fires. Only the ancestor walk does.
+        # UNC screen nor a leaf link check fires. Only the held chain screen does.
         src, err = th._resolve_local_source(str(link / "theme"))
 
         assert src is None
         assert err == "local path must not be a symlink"
 
     @requires_symlinks
-    def test_the_error_does_not_disclose_which_ancestor_was_linked(
-        self, tmp_path, monkeypatch
-    ):
+    def test_the_error_does_not_disclose_which_ancestor_was_linked(self, tmp_path, monkeypatch):
         monkeypatch.setattr(th, "IS_WINDOWS", True)
+        if os.name != "nt":
+            monkeypatch.setattr(platform_compat, "win_fd_is_link", lambda _fd: False)
         real = tmp_path / "real"
         real.mkdir()
         (real / "theme").mkdir()
@@ -1573,14 +1521,11 @@ class TestResolveLocalSourceAncestorLinks:
 
     @requires_symlinks
     def test_the_walk_runs_BEFORE_the_leaf_probe(self, tmp_path, monkeypatch):
-        """The leaf probe is itself an lstat, which resolves every ancestor.
-
-        `is_link_or_junction(p)` does not follow the FINAL component, but it
-        still resolves the ones above it -- so running it before the ancestor
-        walk would traverse the very junction the walk exists to refuse, and
-        make the SMB connection anyway. Wiring the leaf predicate to raise
-        proves the walk returned first: if the order regresses, this explodes
-        instead of failing an assertion.
+        """The held screen refuses the linked ancestor before the leaf
+        ``is_link_or_junction`` lstat runs -- that lstat would itself resolve
+        every ancestor and traverse the junction. Wiring the leaf predicate to
+        raise proves the held screen returned first: if the order regresses,
+        this explodes instead of failing an assertion.
         """
         real = tmp_path / "real"
         real.mkdir()
@@ -1589,12 +1534,14 @@ class TestResolveLocalSourceAncestorLinks:
         link.symlink_to(real, target_is_directory=True)
 
         monkeypatch.setattr(th, "IS_WINDOWS", True)
+        if os.name != "nt":
+            monkeypatch.setattr(platform_compat, "win_fd_is_link", lambda _fd: False)
 
         def _boom(_path):
-            raise AssertionError("leaf probe ran before the ancestor walk")
+            raise AssertionError("leaf probe ran before the held screen")
 
-        # Patches themes' own binding only; `first_linked_ancestor` resolves the
-        # predicate through platform_compat, so the walk itself still works.
+        # Patches themes' own binding only; the held screen refuses the real
+        # symlink via O_NOFOLLOW/ELOOP before this leaf predicate is reached.
         monkeypatch.setattr(th, "is_link_or_junction", _boom)
 
         src, err = th._resolve_local_source(str(link / "theme"))
@@ -1603,9 +1550,7 @@ class TestResolveLocalSourceAncestorLinks:
         assert err == "local path must not be a symlink"
 
     @requires_symlinks
-    def test_a_posix_path_beneath_a_linked_ancestor_is_still_accepted(
-        self, tmp_path, monkeypatch
-    ):
+    def test_a_posix_path_beneath_a_linked_ancestor_is_still_accepted(self, tmp_path, monkeypatch):
         """macOS `/tmp` and `/var` are symlinks to `/private/*`.
 
         An unconditional ancestor walk refuses every install from a temp dir on

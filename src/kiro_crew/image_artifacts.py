@@ -59,7 +59,7 @@ from kiro_crew.messaging.outbound_files import (
     strip_url_syntax,
     unescape_md,
 )
-from kiro_crew.platform_compat import first_linked_ancestor, is_link_or_junction
+from kiro_crew.pinned_fs import screen_linked_chain_held
 from kiro_crew.security import is_sensitive_path
 from kiro_crew.widget_slug import derive_widget_slug
 
@@ -128,18 +128,23 @@ def _local_file(raw_path: str) -> Path | None:
     # its own probes. Windows-only: on POSIX stat-ing through a symlink is
     # harmless. Reference wiring:
     # dashboard/handlers/themes.py::_resolve_local_source.
-    if os.name == "nt" and first_linked_ancestor(p) is not None:
-        return None
-    # The LEAF gets the junction-aware check the walk deliberately excludes:
-    # is_file() below FOLLOWS a final-component link, so a leaf
-    # symlink/junction targeting a UNC share is the same probe. lstat-based,
-    # never follows.
-    if os.name == "nt" and is_link_or_junction(p):
-        return None
-    try:
-        if not p.is_file():
+    #
+    # The screen and the probes share ONE hold: `screen_linked_chain_held`
+    # refuses a link ANYWHERE in the chain (ancestor OR leaf) and returns
+    # the held descriptor's own final path, so the `is_file()` /
+    # `is_sensitive_path` below run on THAT canonical path, not the raw name --
+    # a junction planted between the screen and the probe cannot redirect the
+    # probe into an SMB auth, because the screen and the probe share one hold.
+    probe = p
+    if os.name == "nt":
+        held = screen_linked_chain_held(str(p))
+        if held is None:
             return None
-        if is_sensitive_path(str(p)):
+        probe = Path(held)
+    try:
+        if not probe.is_file():
+            return None
+        if is_sensitive_path(str(probe)):
             return None
     except OSError:
         return None
@@ -193,7 +198,7 @@ def register_images(text: str, message_ts: str, session_key: str) -> list[str]:
         # the artifact name and the image's accessible description.
         alt = unescape_md(m.group(1) or "").strip()
         # The destination starts right after the opening paren this match ended on.
-        raw_path = md_destination(text[m.end():])
+        raw_path = md_destination(text[m.end() :])
         if not raw_path:
             continue
         if is_remote_destination(raw_path):

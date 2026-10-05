@@ -58,7 +58,7 @@ from kiro_crew.imaging import (  # noqa: F401 -- constants re-exported, see comm
     downscale_image_block,
 )
 from kiro_crew.messaging.raster import SNIFF_BYTES, sniff_raster_mime
-from kiro_crew.platform_compat import first_linked_ancestor, is_link_or_junction
+from kiro_crew.pinned_fs import screen_linked_chain_held
 
 logger = logging.getLogger(__name__)
 
@@ -140,16 +140,21 @@ def build_prompt_blocks(
             # connection. Windows-only for the same reason as the UNC gate:
             # on POSIX stat-ing through a symlink is harmless. Reference
             # wiring: dashboard/handlers/themes.py::_resolve_local_source.
-            if os.name == "nt" and first_linked_ancestor(path) is not None:
-                seen.add(raw)
-                continue
-            # The LEAF gets the junction-aware check the walk deliberately
-            # excludes: is_file() below FOLLOWS a final-component link, so a
-            # leaf symlink/junction targeting a UNC share is the same probe.
-            # lstat-based, so the link itself is never followed.
-            if os.name == "nt" and is_link_or_junction(path):
-                seen.add(raw)
-                continue
+            #
+            # The screen and the file probe share ONE hold:
+            # `screen_linked_chain_held` holds the chain no-follow, refuses a
+            # link ANYWHERE in it (ancestor OR leaf), and returns the held
+            # descriptor's own final path. The `is_file()` / `stat()` below run
+            # on THAT canonical path, not the raw name, so a junction planted
+            # between the screen and the probe cannot redirect the probe into an
+            # SMB auth -- the screen and the probe share one hold.
+            probe_path: Path = path
+            if os.name == "nt":
+                held = screen_linked_chain_held(str(path))
+                if held is None:
+                    seen.add(raw)
+                    continue
+                probe_path = Path(held)
             # A long run of prose ending in an image suffix is not a path: a
             # component over 255 characters (past every common name limit) raises
             # ENAMETOOLONG (pathlib on 3.12 does not swallow it), and one raise
@@ -158,12 +163,12 @@ def build_prompt_blocks(
             if any(len(part) > 255 for part in path.parts):
                 continue
             try:
-                if not path.is_file():
+                if not probe_path.is_file():
                     continue
             except OSError:
                 continue
             try:
-                size = path.stat().st_size
+                size = probe_path.stat().st_size
             except OSError:
                 logger.debug("acp prompt: could not stat image %s", raw, exc_info=True)
                 continue
