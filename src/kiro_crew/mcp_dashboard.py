@@ -3007,6 +3007,8 @@ def _call_tool_inner(name: str, args: dict[str, Any]) -> str:
             # simply not rendered.
             if row.get("hidden"):
                 meta_bits.append("hidden")
+            if row.get("pinned"):
+                meta_bits.append("pinned")
             meta = f"  ({' · '.join(meta_bits)})" if meta_bits else ""
             tree_lines.append(f"{'  ' * depth}{fid}  {fpath}{meta}")
             for slot_row in by_folder.get(fid, []):

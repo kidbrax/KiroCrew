@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, memo, useMemo, useCallback, useId, Fragment } from 'react'
 import { createPortal } from 'react-dom'
 import { LayoutGroup, AnimatePresence, motion } from 'framer-motion'
-import { Plus, X, Pin, Monitor, ArrowUpDown, Eye, EyeOff, VenetianMask, Ghost, FolderPlus, FolderX, MessageSquare, MessageSquarePlus, Folder, ChevronRight, ChevronDown, ChevronUp, Clock, Pencil, BrushCleaning, Link2, Circle, MoreVertical, Tag as TagIcon, Columns3, CornerDownRight, GripVertical, Check, GitFork, List, ListTree, Loader, Loader2, Settings, RotateCcw, Bot, ExternalLink, Cpu, GitMerge, Workflow, CircleDot, Users, TriangleAlert, Goal, MessageCircleQuestionMark, ShieldCheck, Server, Pause, Play, Hourglass } from 'lucide-react'
+import { Plus, X, Pin, PinOff, Monitor, ArrowUpDown, Eye, EyeOff, VenetianMask, Ghost, FolderPlus, FolderX, MessageSquare, MessageSquarePlus, Folder, ChevronRight, ChevronDown, ChevronUp, Clock, Pencil, BrushCleaning, Link2, Circle, MoreVertical, Tag as TagIcon, Columns3, CornerDownRight, GripVertical, Check, GitFork, List, ListTree, Loader, Loader2, Settings, RotateCcw, Bot, ExternalLink, Cpu, GitMerge, Workflow, CircleDot, Users, TriangleAlert, Goal, MessageCircleQuestionMark, ShieldCheck, Server, Pause, Play, Hourglass } from 'lucide-react'
 import GithubLogo from '../components/icons/GithubLogo'
 import GitlabLogo from '../components/icons/GitlabLogo'
 import { FolderBody } from '../components/FolderBody'
@@ -2987,7 +2987,7 @@ function ChatSidebar({
   } = useColumnMatches({ subagentStartedCounts, subagentApprovalCounts, workflowActiveSet, automationRunningSet })
 
   const {
-    slotFolders, foldersWithActiveSubtree, setRevealForcedVisible, isFolderHidden, filterHiddenSubtree,
+    slotFolders, foldersWithActiveSubtree, setRevealForcedVisible, isFolderHidden, filterHiddenSubtree, pinnedFolderSubtree, pinnedFolderAncestors, pinOverridesHide, isSlotInPinnedFolder,
   } = useFolderVisibility({ folders, localSlots, filterHiddenFolders })
 
   useStaleMoveWatcher({ foldersLoaded, localSlots, slotFolders, setStaleRecentlyMoved })
@@ -3033,11 +3033,17 @@ function ChatSidebar({
         // Tags. Unlike the folder filter this does NOT go inert while
         // searching: it is a session property, so it behaves like the
         // Unread/Pinned status chips.
-        filtersRow: slot => activeTagIds.size === 0 || (slot.tags ?? []).some(id => activeTagIds.has(id)),
+        //
+        // A row in a pinned folder passes whatever the chips say, here and in
+        // the status dimension below: the folder pin is the person's standing
+        // answer to "do I want to see these", and a chip is the narrower,
+        // momentary one. `narrows` is untouched, so the list still reports
+        // itself as narrowed and the chip still shows, because other rows are.
+        filtersRow: slot => activeTagIds.size === 0 || isSlotInPinnedFolder(slot) || (slot.tags ?? []).some(id => activeTagIds.has(id)),
         narrows: () => activeTagIds.size > 0,
         // Raw `filterTagIds`, not resolved `activeTagIds`, and not behind
         // `excluded`: mid-flight nothing is filtered, so the row is re-hidden.
-        hides: slot => filterTagIds.size > 0 && !(slot.tags ?? []).some(id => filterTagIds.has(id)),
+        hides: slot => filterTagIds.size > 0 && !isSlotInPinnedFolder(slot) && !(slot.tags ?? []).some(id => filterTagIds.has(id)),
         clear: () => clearTagFilter(),
       },
       {
@@ -3078,9 +3084,10 @@ function ChatSidebar({
         // passes when any active chip's predicate matches it. `activeFilterDefs`
         // is empty while the filters are paused, so every row passes and the
         // dimension neither narrows nor hides.
-        filtersRow: slot => activeFilterDefs.length === 0 || activeFilterDefs.some(filterDef => _derivedLookup[filterDef.key](slot)),
+        // A row in a pinned folder passes regardless (see the tag dimension).
+        filtersRow: slot => activeFilterDefs.length === 0 || isSlotInPinnedFolder(slot) || activeFilterDefs.some(filterDef => _derivedLookup[filterDef.key](slot)),
         narrows: () => activeFilterDefs.length > 0,
-        hides: (slot, excluded) => activeFilterDefs.length > 0 && excluded(slot),
+        hides: (slot, excluded) => activeFilterDefs.length > 0 && !isSlotInPinnedFolder(slot) && excluded(slot),
         // Persisted inside the hook: a remount re-reads the stored '1' (or '2')
         // and would silently restore the filter that hides this row.
         clear: () => clearAllFilters(),
@@ -3115,7 +3122,7 @@ function ChatSidebar({
         },
       },
     ]
-  }, [activeFilters, filtersPaused, activeTagIds, filterTagIds, clearTagFilter, slotFilter, folderNameMatchIds, searchRanked, _derivedLookup, filterHiddenSubtree, folders, slotFolders, clearAllFilters, setFilterHiddenFolders])
+  }, [activeFilters, filtersPaused, activeTagIds, filterTagIds, clearTagFilter, slotFilter, folderNameMatchIds, searchRanked, _derivedLookup, filterHiddenSubtree, folders, slotFolders, clearAllFilters, setFilterHiddenFolders, isSlotInPinnedFolder])
 
   // State and in the memo deps on purpose, not a ref: a frozen run caches its
   // stale list against new deps, so clearing a ref would invalidate nothing.
@@ -3273,7 +3280,7 @@ function ChatSidebar({
   const {
     isFolderFilteredOut, revealedContainers, toggleReveal, hiddenByContainer, allHiddenFolders,
     hiddenFolderCount,
-  } = useFolderFilterReveal({ folderFilterActive, filterHiddenFolders, folders, isFolderHidden, folderCompare, boardLaneActive })
+  } = useFolderFilterReveal({ folderFilterActive, filterHiddenFolders, folders, isFolderHidden, folderCompare, boardLaneActive, pinOverridesHide })
 
   const {
     isRowFolderHidden, flatSlots,
@@ -3293,7 +3300,7 @@ function ChatSidebar({
 
   const {
     folderFilterRows,
-  } = useFolderFilterRows({ filteredSlots, slotFolders, folders, folderCompare, filterHiddenFolders, filterHiddenSubtree })
+  } = useFolderFilterRows({ filteredSlots, slotFolders, folders, folderCompare, filterHiddenFolders, filterHiddenSubtree, pinnedFolderSubtree, pinnedFolderAncestors })
 
   const {
     createFolderMutation, deleteFolderMutation, updateFolderMutation, toggleCollapse,
@@ -3922,16 +3929,53 @@ function ChatSidebar({
           currentFolderId={folder.parent_id || null}
           onPick={pid => moveFolderTo(folder.id, pid)} />
         <Item data-testid={tid('settings')} onClick={() => { setFolderModal({ mode: 'edit', folderId: folder.id }) }}><Settings size={13} /> {i18nT('components.folderConfigModal.folder_settings')}</Item>
+        {/* Pin this folder: its sessions (subfolders included) stay listed while
+         *  the status chips, the tag chips or the folder checkboxes narrow the
+         *  list. Server-stored on the folder, next to the session pin, so it
+         *  follows the person across browsers. Pinning also lifts a local hide
+         *  on this folder and on every folder above it: the two cannot both
+         *  hold, the pin is the one just asked for, and an unchecked ancestor
+         *  would otherwise take the pinned block away with its own. Same walk
+         *  as the folder dimension's reveal `clear`. The rows are NOT pinned individually — no row glyph, no
+         *  pinned-reorder band — because the promise is about the folder. */}
+        <Item data-testid={tid('pin')} onClick={() => {
+          if (!folder.pinned) {
+            setFilterHiddenFolders(prev => {
+              const next = new Set(prev)
+              const visited = new Set<string>()
+              let curId: string | undefined = folder.id
+              while (curId && !visited.has(curId)) {
+                visited.add(curId)
+                next.delete(curId)
+                const cid: string = curId
+                curId = folders.find(f => f.id === cid)?.parent_id
+              }
+              if (next.size === prev.size) return prev
+              safeSetItem(HIDDEN_FOLDERS_LS_KEY, JSON.stringify([...next]))
+              return next
+            })
+          }
+          updateFolderMutation.mutate({ id: folder.id, body: { pinned: !folder.pinned } })
+        }}>
+          {folder.pinned
+            ? <><PinOff size={13} /> {i18nT('pages.chatSidebar.unpin_folder')}</>
+            : <><Pin size={13} /> {i18nT('pages.chatSidebar.pin_folder')}</>}
+        </Item>
         {/* Hide this folder from the session lists (flat lane + tree).
          *  Same state the filter menu's checkboxes drive, reached from the
          *  folder itself — which is where the user is looking when they
          *  decide a folder is noise. Distinct from "Hide when empty"
-         *  below, which is a server-persisted archive affordance. */}
-        <Item data-testid={tid('visibility')} onClick={() => { toggleFolderFilter(folder.id) }}>
-          {filterHiddenFolders.has(folder.id)
-            ? <><Eye size={13} /> {i18nT('pages.chatSidebar.show_folder')}</>
-            : <><EyeOff size={13} /> {i18nT('pages.chatSidebar.hide_folder')}</>}
-        </Item>
+         *  below, which is a server-persisted archive affordance. Withheld
+         *  under a folder pin, and above one: the pin steps over the hide on
+         *  both, so the entry would toggle a checkbox that changes nothing on
+         *  screen. */}
+        {!pinOverridesHide.has(folder.id) && (
+          <Item data-testid={tid('visibility')} onClick={() => { toggleFolderFilter(folder.id) }}>
+            {filterHiddenFolders.has(folder.id)
+              ? <><Eye size={13} /> {i18nT('pages.chatSidebar.show_folder')}</>
+              : <><EyeOff size={13} /> {i18nT('pages.chatSidebar.hide_folder')}</>}
+          </Item>
+        )}
         {folderOffersHide(folder, foldersWithActiveSubtree) && (
           <Item data-testid={tid('hide')} onClick={() => { updateFolderMutation.mutate({ id: folder.id, body: { hidden: true } }) }}><EyeOff size={13} /> {i18nT('pages.chatSidebar.hide_when_empty')}</Item>
         )}
@@ -4148,6 +4192,13 @@ function ChatSidebar({
                 <span className="shrink-0 opacity-80" aria-hidden><ChannelBrandIcon channel={folder.channel} size={11} /></span>
               )}
               {folder.project_dir && <span className="text-[10px] text-accent/60 shrink-0" title={folder.project_dir}><Link2 size={9} /></span>}
+              {/* The folder pin, on the folder header only: the rows under it carry
+               *  no pin glyph, because they are not pinned — the folder is. */}
+              {folder.pinned && (
+                <span className="text-[10px] text-accent/60 shrink-0" role="img" data-testid={`folder-pinned-${folder.id}`}
+                  aria-label={i18nT('pages.chatSidebar.pinned_folder_always_shown', { name: folder.name })}
+                  title={i18nT('pages.chatSidebar.pinned_folder_always_shown', { name: folder.name })}><Pin size={9} /></span>
+              )}
               {/* Unread dot on the RIGHT, inline before the count — a state marker
                *  reading after the text, not a gutter marker. #3903 moved it into an
                *  absolute LEFT gutter, which forced the header's pad to 18px; that
@@ -5501,33 +5552,48 @@ function ChatSidebar({
                         <span className="flex-1">{i18nT('pages.chatSidebar.show_all_folders')}</span>
                       </DropdownMenuItem>
                     )}
-                    {folderFilterRows.map(({ folder: f, depth, count, hidden, hiddenByAncestor }) => (
-                      <DropdownMenuItem
-                        key={f.id}
-                        style={{ paddingLeft: `${8 + depth * 14}px` }}
-                        title={hiddenByAncestor
-                          ? i18nT('pages.chatSidebar.hidden_because_parent_hidden', { name: f.name })
-                          : hidden ? i18nT('pages.chatSidebar.show_folder') : i18nT('pages.chatSidebar.hide_folder')}
-                        // Keep the menu open so several folders can be toggled.
-                        onSelect={e => { e.preventDefault(); toggleFolderFilter(f.id) }}
-                        data-testid={`folder-filter-${f.id}`}
-                        role="menuitemcheckbox"
-                        aria-checked={!hidden && !hiddenByAncestor}
-                      >
-                        <span
-                          aria-hidden="true"
-                          className="w-3.5 h-3.5 shrink-0 rounded-[3px] border flex items-center justify-center"
-                          style={hidden || hiddenByAncestor
-                            ? { borderColor: 'var(--border)', background: 'transparent' }
-                            : { borderColor: 'var(--accent)', background: 'var(--accent)' }}
+                    {folderFilterRows.map(({ folder: f, depth, count, hidden, hiddenByAncestor, pinned, holdsPinned }) => {
+                      // A folder under a pin, or holding one, reads checked and
+                      // inert: the pin steps over this checkbox, so a tick here
+                      // would change nothing on screen, and the row says why
+                      // instead of offering it.
+                      const inert = pinned || holdsPinned
+                      return (
+                        <DropdownMenuItem
+                          key={f.id}
+                          style={{ paddingLeft: `${8 + depth * 14}px` }}
+                          title={pinned
+                            ? i18nT('pages.chatSidebar.pinned_folder_always_shown', { name: f.name })
+                            : holdsPinned
+                              ? i18nT('pages.chatSidebar.holds_pinned_folder', { name: f.name })
+                              : hiddenByAncestor
+                                ? i18nT('pages.chatSidebar.hidden_because_parent_hidden', { name: f.name })
+                                : hidden ? i18nT('pages.chatSidebar.show_folder') : i18nT('pages.chatSidebar.hide_folder')}
+                          // Keep the menu open so several folders can be toggled.
+                          onSelect={e => { e.preventDefault(); if (!inert) toggleFolderFilter(f.id) }}
+                          disabled={inert}
+                          data-testid={`folder-filter-${f.id}`}
+                          data-folder-pinned={pinned ? '' : undefined}
+                          data-folder-holds-pinned={holdsPinned ? '' : undefined}
+                          role="menuitemcheckbox"
+                          aria-checked={inert || (!hidden && !hiddenByAncestor)}
                         >
-                          {!hidden && !hiddenByAncestor && <Check size={10} className="text-accent-fg" strokeWidth={3} />}
-                        </span>
-                        <FolderGlyph color={f.color} icon={f.icon} size={12} className="shrink-0 text-muted" />
-                        <span className={`flex-1 truncate${hiddenByAncestor ? ' opacity-50' : ''}`}>{f.name}</span>
-                        {count > 0 && <span className="text-muted text-[11px] shrink-0">{count}</span>}
-                      </DropdownMenuItem>
-                    ))}
+                          <span
+                            aria-hidden="true"
+                            className="w-3.5 h-3.5 shrink-0 rounded-[3px] border flex items-center justify-center"
+                            style={!inert && (hidden || hiddenByAncestor)
+                              ? { borderColor: 'var(--border)', background: 'transparent' }
+                              : { borderColor: 'var(--accent)', background: 'var(--accent)' }}
+                          >
+                            {(inert || (!hidden && !hiddenByAncestor)) && <Check size={10} className="text-accent-fg" strokeWidth={3} />}
+                          </span>
+                          <FolderGlyph color={f.color} icon={f.icon} size={12} className="shrink-0 text-muted" />
+                          <span className={`flex-1 truncate${hiddenByAncestor && !inert ? ' opacity-50' : ''}`}>{f.name}</span>
+                          {pinned && <Pin size={10} className="text-muted shrink-0" aria-hidden="true" />}
+                          {count > 0 && <span className="text-muted text-[11px] shrink-0">{count}</span>}
+                        </DropdownMenuItem>
+                      )
+                    })}
                       </>
                     )}
                   </>
