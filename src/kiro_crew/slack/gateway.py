@@ -6052,7 +6052,14 @@ class GatewayOrchestrator:
 
         self._cron_reconciled = False
         self._cron_armed = False
-        self.cron_svc = await CronService.create(base_dir=data_home(), on_job=_cron_callback)
+        # An unparseable store refuses every write, and the app cron cleanup
+        # below and in the dashboard's startup hooks writes to it, so the
+        # gateway could not start. create() moves it aside instead.
+        self.cron_svc = await CronService.create(
+            base_dir=data_home(), on_job=_cron_callback, quarantine_unreadable=True
+        )
+        moved = getattr(self.cron_svc, "quarantined_store", None)
+        self._cron_quarantine = moved if isinstance(moved, Path) else None
         if self.dashboard_state:
             self.cron_svc.set_refresh_callback(self.dashboard_state.push_refresh)
         if self._no_crons:
@@ -6075,6 +6082,21 @@ class GatewayOrchestrator:
             self._cron_reconciled = True
             if arm:
                 await self._start_cron_after_memory_ready()
+
+    def _announce_cron_quarantine(self) -> None:
+        """Tell the dashboard that startup moved an unreadable cron store aside."""
+        moved = getattr(self, "_cron_quarantine", None)
+        if moved is None or self.dashboard_state is None:
+            return
+        self.dashboard_state.notify(
+            "cron",
+            "Scheduled tasks could not be read",
+            "The schedule file was not a readable schedule (invalid JSON, or no jobs "
+            f"list), so Kiro Crew moved it to {moved} and started with no scheduled "
+            "tasks. Nothing was deleted. To restore: fix that copy, stop Kiro Crew, "
+            f"move it back to {data_home() / 'crons.json'}, and start again. "
+            "`kirocrew doctor` shows the same steps.",
+        )
 
     async def _start_cron_after_memory_ready(self) -> None:
         """Arm overdue jobs only after the memory preparation fence completes."""
@@ -12836,6 +12858,7 @@ class GatewayOrchestrator:
         self._init_task_runner()
         if not self._no_dashboard:
             await self._init_dashboard()
+            self._announce_cron_quarantine()
         else:
             await self._init_api_server()
         # The dashboard/API socket is bound now. A missing wrapper can take the
