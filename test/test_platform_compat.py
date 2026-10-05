@@ -2124,12 +2124,86 @@ class TestProcessArgvMatchesExact:
                 changed[-1] = changed[-1] + " "
                 assert pc.process_argv_matches_exact(child.pid, changed) is False
             else:
-                # Windows: element-exact argv equality is not verifiable (the
-                # raw command line carries shell quoting, not a vector) — the
-                # guard fails closed even for the true argv.
-                assert pc.process_argv_matches_exact(child.pid, argv) is False
+                # Windows: the live command line must equal list2cmdline(argv).
+                # The -c payload carries spaces and quotes, so real quoting runs.
+                assert pc.process_argv_matches_exact(child.pid, argv) is True
+                assert pc.process_argv_matches_exact(child.pid, argv[:-1]) is False
+                changed = list(argv)
+                changed[-1] = changed[-1] + " "
+                assert pc.process_argv_matches_exact(child.pid, changed) is False
         finally:
             self._reap(child)
+
+    # Shapes a Windows ssh forward argv can carry: a host or ProxyCommand with
+    # spaces, embedded double quotes, and backslashes before a quote or at the end.
+    _WINDOWS_ARGVS = [
+        [r"C:\Windows\System32\OpenSSH\ssh.exe", "-N", "-L", "7778:127.0.0.1:7777", "host"],
+        [r"C:\Program Files\OpenSSH\ssh.exe", "-N", "my host alias"],
+        [
+            r"C:\Windows\System32\OpenSSH\ssh.exe",
+            "-o",
+            'ProxyCommand=C:\\tools\\proxy.exe --name "bastion one" %h %p',
+            "h",
+        ],
+        ["ssh.exe", "-o", 'ProxyCommand=cmd /c "a\\" b', "trail\\"],
+        ["ssh.exe", ""],
+    ]
+
+    def _as_windows(self, monkeypatch, command_line):
+        monkeypatch.setattr(pc, "IS_WINDOWS", True)
+        seen: list[int] = []
+
+        def read(pid):
+            seen.append(pid)
+            if isinstance(command_line, BaseException):
+                raise command_line
+            return command_line
+
+        monkeypatch.setattr(pc, "process_command_line", read)
+        return seen
+
+    @pytest.mark.parametrize("argv", _WINDOWS_ARGVS)
+    def test_windows_matches_the_list2cmdline_string_exactly(self, monkeypatch, argv):
+        seen = self._as_windows(monkeypatch, subprocess.list2cmdline(argv))
+
+        assert pc.process_argv_matches_exact(4242, argv) is True
+        assert seen == [4242]
+
+    @pytest.mark.parametrize("argv", _WINDOWS_ARGVS)
+    def test_windows_naive_join_or_near_miss_does_not_match(self, monkeypatch, argv):
+        expected = subprocess.list2cmdline(argv)
+        for actual in {
+            " ".join(argv),
+            expected + " ",
+            expected + " -x",
+            subprocess.list2cmdline(argv[:-1]),
+            expected.replace("ssh", "SSH"),
+        } - {expected}:
+            self._as_windows(monkeypatch, actual)
+            assert pc.process_argv_matches_exact(4242, argv) is False, actual
+
+    @pytest.mark.parametrize("unreadable", ["", OSError("wmi down"), RuntimeError("boom")])
+    def test_windows_unreadable_command_line_answers_false(self, monkeypatch, unreadable):
+        self._as_windows(monkeypatch, unreadable)
+
+        assert pc.process_argv_matches_exact(4242, ["ssh.exe", "h"]) is False
+
+    def test_windows_rejects_bad_pid_before_any_read(self, monkeypatch):
+        seen = self._as_windows(monkeypatch, "ssh.exe h")
+
+        for bad in (0, 1, -5, True, "4242"):
+            assert pc.process_argv_matches_exact(bad, ["ssh.exe", "h"]) is False
+        assert pc.process_argv_matches_exact(4242, []) is False
+        assert seen == []
+
+    def test_cmd_shim_target_never_matches_on_windows(self, monkeypatch):
+        # A .cmd entrypoint runs under cmd.exe, whose command line differs.
+        argv = [r"C:\Program Files\Amazon\AWSCLIV2\aws.cmd", "ssm", "start-session"]
+        self._as_windows(
+            monkeypatch,
+            r'C:\WINDOWS\system32\cmd.exe /c ""C:\Program Files\Amazon\AWSCLIV2\aws.cmd" ssm start-session"',
+        )
+        assert pc.process_argv_matches_exact(4242, argv) is False
 
     def test_unconfirmable_identities_answer_false(self):
         # A pid that cannot exist, reserved pids, and an empty expectation all

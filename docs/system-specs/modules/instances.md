@@ -148,7 +148,7 @@ Module responsibilities:
 | Module | Responsibility |
 |--------|----------------|
 | `registry.py` | Persistent list of configured instances (`~/.kiro/crew/instances.json`) + `last_active_id`. Light charset check on `ssh_host`/`remote_bin` (SSH) or `ssm_target`/`aws_profile`/`aws_region`/`ssm_run_as` (SSM) at add/update, per `connection_method`; the `fargate` arm requires an ECS task target and the `ssm` arm refuses one (§16); every mutation re-reads the file and writes atomically while holding a lock keyed by the registry's path and shared by every registry object over it, so two objects in one gateway cannot clobber each other; a separate CLI process is outside that lock and always reads a whole file, but a mutation it interleaves can still be lost. |
-| `port_allocator.py` | Probes for a free loopback port at or above `tunnel_base_port` (7778). A port counts as free only when it is free on **every** loopback address (`127.0.0.1` and `::1`), since the forward binds one family and a foreign listener on the other leaves `localhost:<port>` ambiguous; an address the host cannot assign at all (`EADDRNOTAVAIL`/`EAFNOSUPPORT`/`EPROTONOSUPPORT`, e.g. IPv6 disabled) reads as free rather than occupied, while a probe that could not be *run* (`EMFILE` and friends) propagates rather than being coerced to either answer. A single-address primitive (`_is_addr_free(port, host)`) answers the narrower "did *this* forward's own address come free" question that orphan reclaim asks. The probe sets `SO_REUSEADDR` so a `TIME_WAIT` remnant from a just-closed forward is not a false "in use". |
+| `port_allocator.py` | Probes for a free loopback port at or above `tunnel_base_port` (7778). A port counts as free only when it is free on **every** loopback address (`127.0.0.1` and `::1`), since the forward binds one family and a foreign listener on the other leaves `localhost:<port>` ambiguous; an address the host cannot assign at all (`EADDRNOTAVAIL`/`EAFNOSUPPORT`/`EPROTONOSUPPORT`, e.g. IPv6 disabled) reads as free rather than occupied, while a probe that could not be *run* (`EMFILE` and friends) propagates rather than being coerced to either answer. A single-address primitive (`_is_addr_free(port, host)`) answers the narrower "did *this* forward's own address come free" question that orphan reclaim asks. On POSIX the probe sets `SO_REUSEADDR` so a `TIME_WAIT` remnant from a just-closed forward is not a false "in use" (it exempts `TIME_WAIT` only, never a live `LISTEN`). On Windows that option lets a second socket bind and listen beside a live listener that set it too (OpenSSH's `-L` listener does), so the Windows probe sets `SO_EXCLUSIVEADDRUSE` instead, which fails against any socket still bound to the address; Winsock does not refuse a fresh bind over `TIME_WAIT` remnants. |
 | `token_mint.py` | Runs `kirocrew token --ttl --port --embed-parent-port` on the remote over SSH (run-marker first, then a bin-candidate ladder) and parses the JWT out of the printed URL. Token is returned in memory only, **never logged**. |
 | `ssm_token_mint.py` | The SSM sibling of `token_mint.py`: runs the same subcommand via `aws ssm send-command` through the launcher's `cloud.ssm` chokepoint, reusing the shared remote-command builders. Token in memory only, **never logged**. See §13. |
 | `validation.py` | The authoritative injection-safe guard on `ssh_host` / `remote_bin`, and on `ssm_target` / `aws_profile` / `aws_region` / `ssm_run_as`, applied immediately before any command line is built. See §11. |
@@ -489,21 +489,40 @@ replace, so a record written, edited, or re-pointed by anything but the
 gateway fails verification outright and nothing is ever signalled for it.
 Behind the MAC, defense in depth from kernel-owned facts: the candidate must
 be a genuine ORPHAN — not a pid this manager currently supervises, and
+whose spawning gateway is gone (`_forwarder_orphan_state`). On POSIX that is
 reparented to init (`get_ppid == 1`), which no live gateway's forwarder is
-(subreaper hosts read as non-orphaned and merely miss the reclaim). Then, iff
+(subreaper hosts read as non-orphaned and merely miss the reclaim). Windows
+never re-parents, so there the recorded parent pid counts as gone only when
+nothing runs at it, or when the process now at it was created after the
+forwarder (pid reuse, `platform_compat.created_after`); a live parent created
+before the forwarder, or any order that cannot be settled, is refused. A
+refused orphan test is logged. Then, iff
 the recorded
 `local_port` probes occupied AND both identity halves are recorded AND the
 pid's live start time equals the recorded one AND its **full argv exactly
 equals** the forward command line the manager would construct for the recorded
-port (`platform_compat.process_argv_matches_exact`), it is signalled — SIGTERM
+port (`platform_compat.process_argv_matches_exact`; on Windows, where a
+process has one command-line string rather than an argv vector, the live
+`Win32_Process.CommandLine` must equal `subprocess.list2cmdline(argv)`
+character for character), it is signalled — SIGTERM
 escalating to SIGKILL on a bounded grace, with the start-time identity
 **re-verified before the SIGKILL** (the grace window is exactly where a pid can
 exit and be recycled); pid-scoped for ssh, whose child shares the dead
 gateway's process group; group-scoped for SSM, whose child owns its group, with
 completion judged by the whole group being gone and the port actually
-releasing. Anything short of full identity — either hint missing, start time
-differing or unreadable, argv unreadable (always the case on Windows, so the
-guard fails closed there), or any argv element differing — means the identity
+releasing. Every pid signal goes through `kill_pid_pinned`, which on Windows
+re-checks the recorded start time under an open process handle at the kill,
+because the WMI command-line read sits between the identity check and the
+signal (on POSIX it is a plain `kill_pid`). A Windows SSM forwarder is not
+signalled at all: the group signal there is an unpinned `taskkill /T`, and
+ending only the `aws` wrapper would strand its plugin child with nothing
+recorded pointing at it. It is logged and its port stays excluded. The Windows
+check proves the command-line string, not the vector: a process that rewrote
+its own command line to that exact string would pass, so the start-time pin is
+what rules out pid reuse; a target launched through a `.cmd`/`.bat` shim runs
+under `cmd.exe`, never matches, and is left alone (#16916). Anything short of
+full identity — either hint missing, start time differing or unreadable, argv
+or command line unreadable, or any argv element differing — means the identity
 cannot be confirmed: the process is left alone (logged, and SEL-audited when
 anything was signalled) and allocation simply skips its port; the freed port
 returns to the pool at the next allocation rather than being re-taken by the

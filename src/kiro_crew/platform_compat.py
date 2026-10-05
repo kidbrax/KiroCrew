@@ -5325,14 +5325,30 @@ def process_argv_matches_exact(pid: int, expected_argv: Sequence[str]) -> bool:
     reports the argv space-joined, so the comparison is against
     ``" ".join(expected_argv)``; exact only when no expected element contains
     a space, which holds for the argv shapes this guards (option tokens and
-    validated host/target strings). Windows: always False — the raw
-    ``Win32_Process.CommandLine`` string (see :func:`process_command_line`)
-    carries shell quoting rather than an argv vector, so element-exact
-    equality is not verifiable there; the guard fails closed and callers must
-    not signal.
+    validated host/target strings).
+
+    Windows: a process has no argv vector, only the one command-line string
+    ``CreateProcess`` was given. ``subprocess`` builds that string from a list
+    with :func:`subprocess.list2cmdline`, so the check is that the live
+    ``Win32_Process.CommandLine`` (read by :func:`process_command_line`, whose
+    only interpolated value is the int pid) equals
+    ``list2cmdline(expected_argv)`` character for character. This proves the
+    string, not the vector: two argv lists that quote to the same string are
+    indistinguishable, and a process may rewrite its own command line after
+    start. An unreadable command line (access denied, process gone, WMI
+    failure) answers False. A target launched through a ``.cmd``/``.bat`` shim
+    runs under ``cmd.exe`` with a different command line, so it never matches
+    and is never signalled.
     """
     if type(pid) is not int or pid <= 1 or not expected_argv:
         return False
+    if IS_WINDOWS:
+        try:
+            expected = subprocess.list2cmdline([str(a) for a in expected_argv])
+            actual = process_command_line(pid)
+        except Exception:
+            return False
+        return bool(actual) and actual == expected
     try:
         if sys.platform == "linux":
             raw = Path(f"/proc/{pid}/cmdline").read_bytes()
