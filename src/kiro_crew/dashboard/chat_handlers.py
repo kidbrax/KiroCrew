@@ -9060,9 +9060,9 @@ def deny_non_owner_remote_operation(
 
     Why the existing guards are not enough. ``deny_app_slot_access``
     returns ``None`` for any caller with an empty ``request["app"]`` — that is
-    its whole contract, "dashboard users pass". But ``send_dashboard_link``
-    mints ``generate_token(user_id, …)`` with ``app=""``, so a Slack-allowlisted
-    NON-owner holds exactly that shape: empty app, ``request["user"]`` different
+    its whole contract, "dashboard users pass". But the Telegram, Teams and
+    Webex dashboard commands mint a token with ``app=""`` for any allowlist
+    user, so a NON-owner holds exactly that shape: empty app, ``request["user"]`` different
     from ``owner_id``. Against a local slot that is only the access the link
     grants by design. Against a peer-bound slot it is the owner's SSH tunnel and
     the owner's connected machine, which is the harm the create/capabilities
