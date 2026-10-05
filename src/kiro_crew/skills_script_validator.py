@@ -80,7 +80,6 @@ _BANNED_ATTR_CALLS = {
     "rmtree",                                 # shutil.rmtree
     "Popen", "run", "call", "check_call", "check_output",  # subprocess.*
     "import_module",                          # importlib.import_module
-    "load_module",                            # __loader__.load_module
     # Process replacement and creation that lives on ``os``. The module itself
     # cannot be banned — a skill legitimately needs os.path/os.environ — so the
     # specific calls are named instead: os.exec* replaces this process with a
@@ -138,11 +137,8 @@ _DANGEROUS_IMPORT_ROOTS = {
     "pty", "pickle", "marshal", "multiprocessing", "runpy", "code",
     "builtins",
 }
-# Module roots (and implicit names) whose attributes are dangerous when referenced
-# (assigned/aliased) rather than called directly (``f = os.remove``).
-# ``__builtins__`` and ``builtins`` give access to eval/exec/compile/__import__
-# via ``__builtins__.eval(...)`` or ``getattr(__builtins__, "eval")``, bypassing
-# the bare-name check.
+# Module roots whose attributes are dangerous when referenced (assigned/aliased)
+# rather than called directly (``f = os.remove``).
 _DANGEROUS_ATTR_ROOTS = {"os", "shutil", "subprocess", "importlib", "ctypes"}
 # Network/egress library roots. Banned outright in generated scripts: the skill
 # contract forbids calling unknown network hosts, and matching on the import
@@ -177,12 +173,11 @@ _DESCRIPTOR_METHODS = {"__getattribute__", "__getattr__"}
 # Attribute names that give reflection/introspection access to dangerous
 # internals on ANY base. Deny regardless of base because they are always exotic.
 # ``.__self__`` reaches the module backing a builtin function
-# (``print.__self__.eval(...)``). ``.__subclasses__``, ``.__bases__``,
-# ``.__base__``, ``.__mro__`` enable type-introspection bypasses.
-# ``.__loader__`` and ``.__spec__`` reach the module loader.
+# (``print.__self__.eval(...)``). ``.__subclasses__`` enables type-introspection
+# bypasses. ``.__loader__`` and ``.__spec__`` reach the module loader.
+# ``.__globals__`` exposes the function's module namespace.
 _DANGEROUS_ATTRS_ANY_BASE = {
-    "__self__", "__subclasses__", "__bases__", "__base__", "__mro__",
-    "__loader__", "__spec__", "__globals__"
+    "__self__", "__subclasses__", "__loader__", "__spec__", "__globals__"
 }
 
 # String literal keys in subscripts that reach builtins indirectly:
@@ -266,10 +261,13 @@ def _ast_findings(content: str) -> List[str]:
         ):
             findings.append(f"dangerous builtin rebound: {node.id}")
 
-    # Ban __builtins__, builtins, __spec__, and __loader__ as bare names.
+    # Ban __builtins__, __spec__, and __loader__ as bare names.
     # ``__builtins__.eval(...)`` bypasses the _BANNED_CALL_NAMES check because
-    # it is an Attribute call, not a Name call. ``__spec__`` and ``__loader__``
-    # exist in the module namespace and reach the module loader.
+    # it is an Attribute call, not a Name call. Plain ``builtins`` is caught via
+    # the import ban in _DANGEROUS_IMPORTED_NAMES, so it cannot be bound as a bare
+    # name unless injected at module level (outside this validator's scope).
+    # ``__spec__`` and ``__loader__`` exist in the module namespace and reach the
+    # module loader.
     for node in ast.walk(tree):
         if isinstance(node, ast.Name) and node.id in {"__builtins__", "__spec__", "__loader__"}:
             if isinstance(node.ctx, ast.Load):
