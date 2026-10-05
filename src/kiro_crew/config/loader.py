@@ -737,12 +737,12 @@ def strip_kiro_cli_api_key(env: MutableMapping[str, str]) -> MutableMapping[str,
     for it.
 
     For KAS the child IS a kiro-cli: Crew reaches it through kiro-cli's ACP relay.
-    The strip still
-    applies because the v3 engine resolves its tokens either from kiro-cli's
-    OIDC store (``--auth-method cli``) or from Crew's own vault over its
-    ``_kiro/auth/getAccessToken`` callback, and an API key in its environment
-    would take precedence over both — the test is what the child's engine
-    consumes, not which binary it is.
+    The strip applies when Crew owns that relay's credential -- the engine asks
+    Crew's vault over its ``_kiro/auth/getAccessToken`` callback, and an API key
+    in its environment would take precedence over the callback. A cli-owned
+    relay (``--auth-method cli``) authenticates itself, so the KAS harness hands
+    it the key with :func:`inject_kiro_cli_api_key` instead -- the test is what
+    the child's engine consumes, not which binary it is.
 
     Matches the platform env-key convention (exact on POSIX, case-folded on
     Windows) so a differently-cased Windows spelling cannot slip past. Mutates

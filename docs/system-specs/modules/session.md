@@ -564,14 +564,14 @@ turn — every dashboard send retired idle sessions and cancelled their
 all): after an unauditable, unreadable or relocated store read, or one that
 found a login no stable claim identifies (a social login), only the key
 component is withheld and the fingerprint is exactly what it was before the key
-was counted, because a harness that strips the key (KAS) authenticates from the
-store, and a key-only baseline would let a store account switch compare equal.
+was counted, because a child can authenticate from the store rather than the
+key, and a key-only baseline would let a store account switch compare equal.
 A child whose per-session env overlay (`extra_env`, e.g. a cron job's `env`
 block) names `KIRO_API_KEY` is never spawn-stamped and never spared by the
 sweep: the fingerprint reads the gateway's credentials, and that child may have
 authenticated as a different account. A spawn stamp proves a wrong account only
 through its store or vault component, never its key component: a harness that
-strips the key (KAS) is unaffected by a key rotation, which the ordinary
+strips the key (a Crew-owned KAS relay) is unaffected by a key rotation, which the ordinary
 baseline comparison still reports.
 **Boot-seeded baseline** (`seed_sessions_baseline`): the running-children
 baseline is adopted from the store at gateway startup, before anything can
@@ -615,8 +615,8 @@ fingerprint, every component — provably authenticated as the live account and
 is skipped by `retire_kiro_identity_sessions`: not retired, not flagged, and
 not counted against completeness (the runtime reapers take the fingerprint as
 `live=` and apply the same test to their post-conditions). For a child that
-never received `KIRO_API_KEY` (KAS and every foreign backend strip it at
-spawn) the key component is left out of that comparison, so a key rotation
+never received `KIRO_API_KEY` (a Crew-owned KAS relay and every foreign backend
+strip it at spawn; a cli-owned KAS relay is handed it, like kiro-cli) the key component is left out of that comparison, so a key rotation
 does not retire its idle parent and cancel its running children. Without it the
 sweep retired every kiro-backed idle session and could complete only when
 every kiro-backed holder was idle at once, which a busy gateway never is:

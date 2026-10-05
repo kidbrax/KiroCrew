@@ -830,10 +830,11 @@ class TestApiKeyIdentity:
         assert kp.identity_stamp_mismatch(f"s1{sep}k1{vault}v1", f"s1{sep}k1{vault}v2") is True
 
     def test_a_key_rotation_spares_a_key_stripping_child_only(self) -> None:
-        """KAS (and every foreign backend) has the key stripped at spawn, so a
-        key rotation alone must not un-spare it -- that would retire its idle
-        parent and cancel running children. A kiro-cli child IS handed the key,
-        so it keeps the whole-fingerprint spare."""
+        """A Crew-owned KAS relay (and every foreign backend) has the key
+        stripped at spawn, so a key rotation alone must not un-spare it -- that
+        would retire its idle parent and cancel running children. A kiro-cli
+        child and a cli-owned KAS relay ARE handed the key, so they keep the
+        whole-fingerprint spare."""
 
         from kiro_crew.acp.runtime import AcpRuntime
         from kiro_crew.providers.acp import AcpProvider
@@ -841,24 +842,33 @@ class TestApiKeyIdentity:
         sep, vault = kp._API_KEY_FINGERPRINT_SEP, kp._CREW_VAULT_FINGERPRINT_SEP
         stamp, rotated = f"s1{sep}k1{vault}v1", f"s1{sep}k2{vault}v1"
 
-        def holder(backend: object) -> SimpleNamespace:
+        def holder(backend: object, **runtime: object) -> SimpleNamespace:
             return SimpleNamespace(
-                spawn_identity=stamp, _runtime=SimpleNamespace(acp_backend=backend)
+                spawn_identity=stamp,
+                _runtime=SimpleNamespace(acp_backend=backend, **runtime),
             )
 
-        assert kp.spawned_under(holder("kas"), rotated) is True
+        crew_owned_kas = holder("kas", _kas_host_auth=True)
+        assert kp.spawned_under(crew_owned_kas, rotated) is True
         assert kp.spawned_under(holder("claude"), rotated) is True
         assert kp.spawned_under(holder(""), rotated) is False
+        # A cli-owned KAS relay authenticated with the key, so a rotation un-spares it.
+        assert kp.spawned_under(holder("kas", _kas_host_auth=False), rotated) is False
+        # A KAS holder whose auth owner cannot be read keeps the stricter spare.
+        assert kp.spawned_under(holder("kas"), rotated) is False
         # An unreadable backend keeps the stricter spare.
         assert kp.spawned_under(SimpleNamespace(spawn_identity=stamp), rotated) is False
         # A store or vault change still un-spares a key-stripping child.
-        assert kp.spawned_under(holder("kas"), f"s2{sep}k2{vault}v1") is False
-        assert kp.spawned_under(holder("kas"), f"s1{sep}k2{vault}v2") is False
+        assert kp.spawned_under(crew_owned_kas, f"s2{sep}k2{vault}v1") is False
+        assert kp.spawned_under(crew_owned_kas, f"s1{sep}k2{vault}v2") is False
 
-        # The backend is read off the real classes.
-        assert kp.receives_kiro_cli_api_key(AcpRuntime(acp_backend="kas")) is False
+        # The backend and auth owner are read off the real classes.
+        crew_owned = AcpRuntime(acp_backend="kas")
+        crew_owned._kas_host_auth = True
+        assert kp.receives_kiro_cli_api_key(crew_owned) is False
+        assert kp.receives_kiro_cli_api_key(AcpRuntime(acp_backend="kas")) is True
         assert kp.receives_kiro_cli_api_key(AcpRuntime()) is True
-        assert kp.receives_kiro_cli_api_key(AcpProvider(acp_backend="kas")) is False
+        assert kp.receives_kiro_cli_api_key(AcpProvider(acp_backend="kas")) is True
         assert kp.receives_kiro_cli_api_key(AcpProvider()) is True
 
 

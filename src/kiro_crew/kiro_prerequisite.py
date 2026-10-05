@@ -1503,7 +1503,7 @@ def spawned_under(holder: Any, live: str) -> bool:
     unreadable store (empty *live*) spares nothing, so a host whose store
     cannot be fingerprinted keeps the fail-safe retire-everything sweep.
     The one exception to whole-string equality is the API-key component of a
-    child that never received the key (KAS, every foreign backend,
+    child that never received the key (a Crew-owned KAS relay, every foreign backend,
     :func:`receives_kiro_cli_api_key`): it is left out of the comparison,
     because a key rotation cannot have changed that child's credential.
     """
@@ -1519,7 +1519,7 @@ def spawned_under(holder: Any, live: str) -> bool:
         return True
     if receives_kiro_cli_api_key(holder):
         return False
-    # A harness that strips the key (KAS, every foreign backend) authenticated
+    # A harness that strips the key (Crew-owned KAS, every foreign backend) authenticated
     # from the store or vault, so the key component says nothing about its
     # credential: a key rotation alone must not un-spare it and cancel its
     # running children. Compare the components it can actually have loaded.
@@ -1537,16 +1537,18 @@ def _without_api_key_component(fingerprint: str) -> str:
 def receives_kiro_cli_api_key(holder: Any) -> bool:
     """Whether *holder*'s child is handed Kiro CLI's own ``KIRO_API_KEY``.
 
-    Only the kiro-cli backend (:data:`ACP_BACKEND_KIRO`, the empty id) is; KAS
-    and every foreign backend have it stripped at spawn. Read off the shared
-    runtime first -- once a provider swaps its placeholder client for a session
-    provider the runtime is the only object that still knows the backend --
-    then the holder and its client. A holder whose backend cannot be read
-    counts as receiving the key: that keeps the stricter whole-fingerprint
-    spare, never a looser one.
+    The kiro-cli backend (:data:`ACP_BACKEND_KIRO`, the empty id) is, and so is
+    a KAS relay spawned cli-owned; a KAS relay whose credential Crew's vault
+    answers (the runtime's ``_kas_host_auth``) and every foreign backend have it
+    stripped at spawn. Read off the shared runtime first -- once a provider swaps
+    its placeholder client for a session provider the runtime is the only object
+    that still knows the backend -- then the holder and its client. A holder
+    whose backend cannot be read, and a KAS holder whose auth owner is not
+    positively Crew, counts as receiving the key: that keeps the stricter
+    whole-fingerprint spare, never a looser one.
     """
 
-    from kiro_crew.agent_sdk.backends import ACP_BACKEND_KIRO
+    from kiro_crew.agent_sdk.backends import ACP_BACKEND_KAS, ACP_BACKEND_KIRO
 
     client = getattr(holder, "client", None) or getattr(holder, "_client", None)
     owners = (
@@ -1561,6 +1563,8 @@ def receives_kiro_cli_api_key(holder: Any) -> bool:
                 continue
             backend = getattr(owner, attribute, None)
             if isinstance(backend, str):
+                if backend == ACP_BACKEND_KAS:
+                    return getattr(owner, "_kas_host_auth", None) is not True
                 return backend == ACP_BACKEND_KIRO
     return True
 

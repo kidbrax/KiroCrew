@@ -2207,17 +2207,20 @@ class AcpRuntime:
             resolve_krb5_ccname(env)
             # KIRO_API_KEY is one host's own MODEL credential and another
             # host's active hazard, so which way it goes is the harness's answer.
-            # kiro-cli is handed it for its v2 agent loop. The KAS relay has it
-            # REMOVED even though its process is now a kiro-cli: the v3 engine
-            # authenticates either from kiro-cli's OIDC store
-            # (--auth-method cli) or from Crew's vault over the
-            # _kiro/auth/getAccessToken callback, and in BOTH shapes the
-            # variable must be absent — the engine gives an API key in its
-            # environment precedence over the callback, so leaving it set would
-            # silently override the credential the operator signed in with.
+            # kiro-cli is handed it for its v2 agent loop. The KAS relay is a
+            # kiro-cli too, so the answer follows the spawn plan's auth owner:
+            # a cli-owned relay (--auth-method cli) authenticates itself and an
+            # API key is one of its sign-ins, so it is handed the key; a
+            # Crew-owned relay answers _kiro/auth/getAccessToken from Crew's
+            # vault and has the key REMOVED -- the engine gives an API key in
+            # its environment precedence over the callback, so leaving it set
+            # would silently override the credential the operator signed in
+            # with.
             # Called here, before the scrub below, so a host can both add its own
             # variables and remove one this generic path would pass through.
-            self._harness.apply_spawn_env(env, spawned_binary=spawned_kiro_bin)
+            self._harness.apply_spawn_env(
+                env, spawned_binary=spawned_kiro_bin, cli_owned_auth=not plan.host_auth
+            )
 
         await self._to_thread_guarding_sandbox(_resolve_env_off_loop)
         # Parent-side equivalent of the launcher scrub. This is required on
