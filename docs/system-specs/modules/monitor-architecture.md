@@ -127,6 +127,25 @@ objective, and the authorization audit record names that borrowed objective.
 Giving the kind its own objective (a registry row plus a per-kind stamp) is the
 next step and is not part of the change that made it reachable.
 
+A conductor does not have to remember that arm. When `work_ledger_record`
+`action=bind` commits and the conductor's slot holds no loop at all,
+`conductor_patrol.ensure_patrol` arms a default patrol on it: `watch:
+"work-ledger"`, gated, every 600 seconds, 300 cycles and 86400 seconds, which
+pass the goal-conductor skill's `patrol_budget.py check`. It goes through the
+same chokepoint as an agent's own `monitor_start`
+(`autonudge_authz.authorize_and_add_nudge`), create-only with no stopped-row
+displacement, and names the conductor's own binding as `initiator_slot_key`: the
+bind is that session's own authenticated tool call. The authorizer alone decides
+from the slot's mode whether that is a crew/member self-arm and writes the
+`autonudge_selfarm` trust record; the patrol code never sets `self_armed`. Any
+existing record -- active, approval-held, or stopped and retained by a person --
+is left alone, so a later bind never stacks a second loop or revives a stopped
+one. A refusal is logged at WARNING and the bind still succeeds; the bind reply
+carries `patrol: armed | existing | refused | unsupported`. As a backstop,
+`work_ledger_read` flags every open item `unpatrolled` while the conductor holds
+no active loop, compact read included. The Crew page board does not show the
+flag yet.
+
 The `monitoring/` package now has a different extension point:
 `models.MonitorProbe`, a structural Protocol with no behaviour inheritance, plus
 the data-only kind registry. The four source-provider adapters and the workflow
