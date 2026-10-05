@@ -240,6 +240,7 @@ _FACADE_DEFS = (
     "_bounded_catalog",
     "_CatalogCache",
     "_fetch_kiro_catalog",
+    "_kiro_wire_row",
     "_shared_catalog_fetch",
     "_consume_refresh_exception",
     "api_models",
@@ -540,7 +541,7 @@ def test_every_base_definition_is_in_exactly_one_place() -> None:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
     }
     assert defined == set(_FACADE_DEFS)
-    assert len(defined | _MOVED) == len(defined) + len(_MOVED) == 121
+    assert len(defined | _MOVED) == len(defined) + len(_MOVED) == 122
 
 
 def test_the_owners_log_as_the_facade() -> None:
