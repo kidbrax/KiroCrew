@@ -829,12 +829,13 @@ def _declared_type_error(entry: ConfigEntry, value: object) -> str | None:
 
 
 def _is_list_key(key: str) -> bool:
-    """True when *key* holds a list: declared ``array``, else a list already stored.
+    """True when *key* is declared ``array`` in the registry.
 
     The declaration is the authority (a wildcard path such as
     ``telegram.accounts.*.allowed_user_ids`` matches segment by segment). A key the
-    registry does not know falls back to the type of the value the config holds
-    today, so a stored list is never overwritten with a string either.
+    registry does not know returns False: the base write path refuses an unknown
+    key outright before this is consulted, so there is no reachable undeclared key
+    for the loader-reset harm to apply to.
     """
     from kiro_crew.config.schema import SCHEMA_REGISTRY
 
@@ -845,10 +846,7 @@ def _is_list_key(key: str) -> bool:
             e == "*" or e == p for e, p in zip(e_parts, parts, strict=True)
         ):
             return entry.type == "array"
-    try:
-        return isinstance(_dict_get(KiroCrewConfig.load().to_dict(), key), list)
-    except (ConfigReadError, OSError, ValueError):
-        return False
+    return False
 
 
 def _parse_list_value(key: str, raw: str) -> list:
@@ -866,23 +864,32 @@ def _parse_list_value(key: str, raw: str) -> list:
     try:
         loaded = json.loads(text)
     except ValueError:
-        guess: list[str] = []
-        if text.startswith("[") and text.endswith("]"):
-            guess = [i.strip().strip("'\"") for i in text[1:-1].split(",") if i.strip()]
-        raise ValueError(f"expected a JSON array, got {raw!r}\n" + _list_hint(key, guess)) from None
+        raise ValueError(f"expected a JSON array, got {raw!r}\n" + _list_hint(key)) from None
     if isinstance(loaded, list):
         return loaded
     raise ValueError(
-        f"expected a JSON array, got a JSON {type(loaded).__name__}\n" + _list_hint(key, [])
+        f"expected a JSON array, got a JSON {type(loaded).__name__}\n" + _list_hint(key)
     )
 
 
-def _list_hint(key: str, items: list[str]) -> str:
-    """The retry lines for a refused list value: the forms that survive PowerShell."""
-    items = items or ["a", "b"]
-    as_json = json.dumps(items, separators=(",", ":"))
+def _list_hint(key: str) -> str:
+    """The retry lines for a refused list value: the forms that survive PowerShell.
+
+    Both the example items (``["a","b"]``) and the key are rendered so that nothing
+    the caller typed can break out of the retry line: the hint is printed for a
+    human or an agent to paste into a shell, so a shell metacharacter in either
+    would let the pasted command run something else. The items are a STATIC
+    example; the key is shown verbatim only when it is a plain config dot-path
+    (the only shape a real key has) and is replaced by a ``<key>`` placeholder
+    otherwise, so a wildcard segment carrying ``;`` or a quote never reaches the
+    shell. The task is to demonstrate the quoting that survives each shell, which
+    a safe key and fixed items do.
+    """
+    as_json = '["a","b"]'
     escaped = as_json.replace('"', '\\"')
-    prefix = f"kirocrew config set {key}"
+    safe_chars = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.*-")
+    safe_key = key if key and set(key) <= safe_chars else "<key>"
+    prefix = f"kirocrew config set {safe_key}"
     return "\n".join(
         [
             "   Nothing was written. A shell may have stripped the quotes of a JSON array",

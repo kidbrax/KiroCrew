@@ -72,9 +72,47 @@ def test_powershell_flattened_array_is_refused_and_writes_nothing(home, capsys):
     # The stored trust list is exactly what it was: this is the incident.
     assert (home / "config.json").read_text(encoding="utf-8") == before
     assert "agent.apps_trusted" in err
-    # The retry lines are built from the caller's own items.
+    # The retry lines are STATIC examples, never rebuilt from the caller's value.
     assert '\'["a","b"]\'' in err  # PowerShell 7.3+
     assert '\'[\\"a\\",\\"b\\"]\'' in err  # Windows PowerShell 5.1
+
+
+def test_the_hint_never_echoes_the_refused_value(home, capsys):
+    # The pasteable retry lines must be static examples: they are copied into a
+    # shell, so echoing the caller's own text would let a quote close the quoting
+    # and run the remainder. (The error summary may name the refused value; it is
+    # not a command to paste.)
+    err = _refused(home, TRUSTED, "[safe,x'; id; #]", capsys=capsys)
+    retry_lines = [ln for ln in err.splitlines() if "kirocrew config set" in ln]
+    assert retry_lines  # the hint was printed
+    for ln in retry_lines:
+        assert "id" not in ln
+        assert "'; " not in ln
+    assert any('\'["a","b"]\'' in ln for ln in retry_lines)
+
+
+def test_the_hint_never_pastes_an_unsafe_key(home, capsys):
+    # A wildcard list key matches before key validation, so a key carrying a shell
+    # metacharacter can reach the hint. The retry line must not paste it: a key
+    # that is not a plain config dot-path is shown as a <key> placeholder.
+    bad_key = "telegram.accounts.main; printf INJECTED; #.allowed_user_ids"
+    err = _refused(home, bad_key, "[a,b]", capsys=capsys)
+    retry_lines = [ln for ln in err.splitlines() if "kirocrew config set" in ln]
+    assert retry_lines
+    for ln in retry_lines:
+        assert "printf INJECTED" not in ln
+        assert "; " not in ln
+        assert "<key>" in ln
+
+
+def test_the_hint_shows_a_plain_dotpath_key_verbatim(home, capsys):
+    # A real key (a plain dot-path, wildcards allowed) is safe to paste, so it is
+    # shown as typed — the hint stays useful for the overwhelming common case.
+    err = _refused(home, "telegram.accounts.main.allowed_user_ids", "[a,b]", capsys=capsys)
+    retry_lines = [ln for ln in err.splitlines() if "kirocrew config set" in ln]
+    assert retry_lines
+    assert all("telegram.accounts.main.allowed_user_ids" in ln for ln in retry_lines)
+    assert all("<key>" not in ln for ln in retry_lines)
 
 
 def test_a_lone_word_is_refused_rather_than_stored_as_a_string(home, capsys):
@@ -155,16 +193,14 @@ def test_list_key_detection():
     assert not _is_list_key("dashboard.url")
 
 
-def test_a_stored_list_under_an_undeclared_key_is_still_a_list(home):
-    (home / "config.json").write_text(json.dumps({"custom": {"things": ["x"]}}), encoding="utf-8")
-    with (
-        patch("kiro_crew.config.loader.config_path", return_value=home / "config.json"),
-        patch("kiro_crew.config.loader.config_dir", return_value=home),
-        patch("kiro_crew.cli_config.KiroCrewConfig.load") as load,
-    ):
-        load.return_value.to_dict.return_value = {"custom": {"things": ["x"]}}
-        assert _is_list_key("custom.things")
+def test_an_undeclared_key_is_not_treated_as_a_list(home):
+    # The registry is the sole authority: an unknown key returns False (the base
+    # write path refuses an unknown key before the list rule is consulted), so no
+    # config load happens on a write whose key misses the registry.
+    with patch("kiro_crew.cli_config.KiroCrewConfig.load") as load:
+        assert not _is_list_key("custom.things")
         assert not _is_list_key("custom.other")
+        load.assert_not_called()
 
 
 def test_parse_list_value_returns_the_json_list_or_refuses():
