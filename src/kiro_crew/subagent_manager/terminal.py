@@ -653,6 +653,9 @@ class TerminalCoordinator(ManagerComponent):
         # `_reap_started`, NOT `reaped`: setting `reaped` this early makes a run
         # woken by our own session reset skip its error synthesis and report a
         # false SUCCESS before we own the record. See `_reap_started`.
+        # Read before ``_reap_started`` takes the run out of ``_in_startup``: a
+        # startup reap of a run already out of startup had its runtime up.
+        runtime_up = reason == "startup_timeout" and not self._manager._in_startup(info)
         info._reap_started = True
         # Snapshot what the reap is interrupting BEFORE the first await below.
         # Both flags are cleared by their owners' ``finally`` -- the approval
@@ -964,6 +967,10 @@ class TerminalCoordinator(ManagerComponent):
                         from kiro_crew.subagent_manager.monitoring import _START_QUEUE_MAX_SECS
 
                         info.error = f"Never started: start queues saturated (over {int(_START_QUEUE_MAX_SECS)}s queued for start permits in total, behind other starts) [{_timeout_context(info, include_elapsed=False, turn_limit=self._manager._effective_turn_limit(info))}]"
+                    elif runtime_up:
+                        from kiro_crew.subagent_manager.monitoring import _FIRST_PROMPT_SILENT_SECS
+
+                        info.error = f"Runtime launched but its first prompt got no answer within {int(_FIRST_PROMPT_SILENT_SECS)}s (no turn produced) [{_timeout_context(info, include_elapsed=False, turn_limit=self._manager._effective_turn_limit(info))}]"
                     elif reason == "startup_timeout":
                         info.error = f"Failed to start within {self._manager._startup_deadline}s (no runtime launched, no turn produced; {info._startup_cotenant_frames} co-tenant frame(s) received, none addressed to this session) [{_timeout_context(info, include_elapsed=False, turn_limit=self._manager._effective_turn_limit(info))}]"
                     else:
